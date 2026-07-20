@@ -1,4 +1,7 @@
 mod app;
+mod camera;
+mod depth;
+mod mesh;
 mod renderer;
 
 use app::App;
