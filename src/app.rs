@@ -1,19 +1,35 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 
 use winit::{
     application::ApplicationHandler,
     dpi::LogicalSize,
-    event::{ElementState, WindowEvent},
+    event::{DeviceEvent, DeviceId, ElementState, MouseButton, WindowEvent},
     event_loop::ActiveEventLoop,
     keyboard::{KeyCode, PhysicalKey},
     window::{Window, WindowId},
 };
 
-use crate::renderer::Renderer;
+use crate::{input::InputState, renderer::Renderer};
 
-#[derive(Default)]
 pub struct App {
     renderer: Option<Renderer>,
+
+    input: InputState,
+
+    last_frame: Instant,
+
+    mouse_captured: bool,
+}
+
+impl Default for App {
+    fn default() -> Self {
+        Self {
+            renderer: None,
+            input: InputState::default(),
+            last_frame: Instant::now(),
+            mouse_captured: false,
+        }
+    }
 }
 
 impl ApplicationHandler for App {
@@ -43,6 +59,10 @@ impl ApplicationHandler for App {
 
         match renderer {
             Ok(renderer) => {
+                self.mouse_captured = renderer.set_cursor_captured(true);
+
+                self.last_frame = Instant::now();
+
                 self.renderer = Some(renderer);
                 window.request_redraw();
             }
@@ -74,14 +94,46 @@ impl ApplicationHandler for App {
             }
 
             WindowEvent::KeyboardInput { event, .. } => {
-                let escape_pressed =
-                    event.state == ElementState::Pressed
-                        && event.physical_key
-                            == PhysicalKey::Code(KeyCode::Escape);
+                let PhysicalKey::Code(key_code) = event.physical_key else {
+                    return;
+                };
 
-                if escape_pressed {
-                    event_loop.exit();
+                if key_code == KeyCode::Escape
+                    && event.state == ElementState::Pressed
+                    && !event.repeat
+                {
+                    if self.mouse_captured {
+                        renderer.set_cursor_captured(false);
+
+                        self.mouse_captured = false;
+                        self.input.clear();
+                    } else {
+                        event_loop.exit();
+                    }
                 }
+
+                self.input.process_key(key_code, event.state);
+            }
+
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Left,
+                ..
+            } => {
+                if !self.mouse_captured {
+                    self.mouse_captured = renderer.set_cursor_captured(true);
+
+                    self.input.clear();
+                    self.last_frame = Instant::now();
+                }
+            }
+
+            WindowEvent::Focused(false) => {
+                self.input.clear();
+
+                renderer.set_cursor_captured(false);
+
+                self.mouse_captured = false;
             }
 
             WindowEvent::Resized(size) => {
@@ -89,11 +141,35 @@ impl ApplicationHandler for App {
             }
 
             WindowEvent::RedrawRequested => {
+                let now = Instant::now();
+
+                let delta_time = now.duration_since(self.last_frame).as_secs_f32().min(0.05);
+
+                self.last_frame = now;
+
+                renderer.update(&mut self.input, delta_time);
+
                 renderer.render();
                 renderer.request_redraw();
             }
 
             _ => {}
+        }
+    }
+
+    fn device_event(
+        &mut self,
+        _event_loop: &ActiveEventLoop,
+        _device_id: DeviceId,
+        event: DeviceEvent,
+    )
+    {
+        if !self.mouse_captured {
+            return;
+        }
+
+        if let DeviceEvent::MouseMotion { delta } = event {
+            self.input.add_mouse_delta(delta);
         }
     }
 }

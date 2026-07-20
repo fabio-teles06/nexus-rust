@@ -1,19 +1,4 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[repr(transparent)]
-pub struct BlockId(pub u16);
-
-pub const AIR: BlockId = BlockId(0);
-pub const STONE: BlockId = BlockId(1);
-
-impl BlockId {
-    pub const fn is_air(self) -> bool {
-        self.0 == AIR.0
-    }
-
-    pub const fn is_solid(self) -> bool {
-        !self.is_air()
-    }
-}
+use super::block::{AIR, BlockId, DIRT, GRASS, STONE};
 
 #[derive(Debug)]
 pub struct World {
@@ -45,10 +30,17 @@ impl World {
         for z in 0..world.depth {
             for x in 0..world.width {
                 let variation = ((x * 13 + z * 7) % 3).abs();
+
                 let surface_y = 3 + variation;
 
-                for y in 0..surface_y {
-                    let block_id = if y == surface_y - 1 { STONE } else { AIR };
+                for y in 0..=surface_y {
+                    let block_id = if y == surface_y {
+                        GRASS
+                    } else if y >= surface_y - 2 {
+                        DIRT
+                    } else {
+                        STONE
+                    };
 
                     world.set(x, y, z, block_id);
                 }

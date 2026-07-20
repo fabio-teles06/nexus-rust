@@ -35,7 +35,7 @@ impl Camera {
 
             movement_speed: 5.0,
             sprint_multiplier: 2.0,
-            mouse_sensitivity: 0.1,
+            mouse_sensitivity: 0.001,
         }
     }
 
@@ -44,6 +44,7 @@ impl Camera {
     }
 
     pub fn update(&mut self, input: &mut InputState, delta_time: f32) {
+        self.update_position(input, delta_time);
         self.update_rotation(input);
     }
 

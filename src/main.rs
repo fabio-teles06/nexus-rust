@@ -1,9 +1,11 @@
 mod app;
-mod input;
 mod camera;
 mod depth;
+mod input;
 mod mesh;
 mod renderer;
+mod voxel;
+
 use app::App;
 use winit::event_loop::{ControlFlow, EventLoop};
 
