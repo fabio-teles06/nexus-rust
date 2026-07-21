@@ -2,7 +2,7 @@ use bevy_ecs::prelude::*;
 use glam::{Mat4, Quat, Vec3};
 use rapier3d::prelude::{RigidBodyHandle, RigidBodySet};
 
-use crate::mesh::{MeshData, append_cube};
+use crate::mesh::InstanceData;
 
 #[derive(Component, Debug, Clone)]
 pub struct DebugName(pub String);
@@ -27,6 +27,9 @@ pub struct RenderCube {
 pub struct EcsScene {
     world: World,
     next_cube: u64,
+    entity_count: usize,
+    first_entity_name: Option<String>,
+    instance_scratch: Vec<InstanceData>,
 }
 
 impl EcsScene {
@@ -34,6 +37,9 @@ impl EcsScene {
         Self {
             world: World::new(),
             next_cube: 1,
+            entity_count: 0,
+            first_entity_name: None,
+            instance_scratch: Vec::new(),
         }
     }
 
@@ -48,6 +54,10 @@ impl EcsScene {
         let name = format!("Physics Cube {}", self.next_cube);
         self.next_cube += 1;
 
+        if self.first_entity_name.is_none() {
+            self.first_entity_name = Some(name.clone());
+        }
+
         self.world.spawn((
             DebugName(name),
             Transform {
@@ -58,6 +68,7 @@ impl EcsScene {
             PhysicsBody { handle },
             RenderCube { color },
         ));
+        self.entity_count += 1;
     }
 
     pub fn sync_from_physics(&mut self, bodies: &RigidBodySet) {
@@ -71,29 +82,33 @@ impl EcsScene {
         }
     }
 
-    pub fn build_render_mesh(&mut self) -> MeshData {
-        let mut mesh = MeshData::default();
-        let mut query = self.world.query::<(&Transform, &RenderCube)>();
+    /// Reutiliza a mesma alocação a cada frame e envia apenas uma matriz e uma
+    /// cor por entidade. A geometria do cubo permanece estática na GPU.
+    pub fn render_instances(&mut self) -> &[InstanceData] {
+        self.instance_scratch.clear();
+        if self.instance_scratch.capacity() < self.entity_count {
+            self.instance_scratch.reserve(self.entity_count);
+        }
 
+        let mut query = self.world.query::<(&Transform, &RenderCube)>();
         for (transform, cube) in query.iter(&self.world) {
             let model = Mat4::from_scale_rotation_translation(
                 transform.scale,
                 transform.rotation,
                 transform.translation,
             );
-            append_cube(&mut mesh, model, cube.color);
+            self.instance_scratch
+                .push(InstanceData::new(model, cube.color));
         }
 
-        mesh
+        &self.instance_scratch
     }
 
-    pub fn entity_count(&mut self) -> usize {
-        let mut query = self.world.query::<&Transform>();
-        query.iter(&self.world).count()
+    pub const fn entity_count(&self) -> usize {
+        self.entity_count
     }
 
-    pub fn first_entity_name(&mut self) -> Option<String> {
-        let mut query = self.world.query::<&DebugName>();
-        query.iter(&self.world).next().map(|name| name.0.clone())
+    pub fn first_entity_name(&self) -> Option<String> {
+        self.first_entity_name.clone()
     }
 }

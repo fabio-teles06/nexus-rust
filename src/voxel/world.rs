@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use glam::{IVec3, Vec3};
 use rayon::prelude::*;
@@ -11,17 +11,11 @@ use super::{
 
 #[derive(Debug, Default)]
 pub struct StreamDelta {
-    /// Chunks que passaram a existir na memória nesta atualização.
     pub loaded: Vec<ChunkPos>,
-    /// Chunks que deixaram de ser necessários tanto para render quanto para física.
     pub unloaded: Vec<ChunkPos>,
-    /// Chunks que entraram no raio visual da câmera.
     pub render_added: Vec<ChunkPos>,
-    /// Chunks que saíram do raio visual, mas podem continuar carregados para física.
     pub render_removed: Vec<ChunkPos>,
-    /// Chunks que passaram a precisar de collider.
     pub physics_added: Vec<ChunkPos>,
-    /// Chunks cujo collider pode ser removido.
     pub physics_removed: Vec<ChunkPos>,
 }
 
@@ -30,8 +24,12 @@ pub struct VoxelWorld {
     dirty: HashSet<ChunkPos>,
     render_chunks: HashSet<ChunkPos>,
     physics_keepalive: HashSet<ChunkPos>,
+    render_offsets: Vec<IVec3>,
+    render_radius_config: (i32, i32),
+    pending_generation: VecDeque<ChunkPos>,
     stream_center: Option<ChunkPos>,
     seed: u32,
+    total_solid_blocks: usize,
 }
 
 impl VoxelWorld {
@@ -41,16 +39,18 @@ impl VoxelWorld {
             dirty: HashSet::new(),
             render_chunks: HashSet::new(),
             physics_keepalive: HashSet::new(),
+            render_offsets: vec![IVec3::ZERO],
+            render_radius_config: (0, 0),
+            pending_generation: VecDeque::new(),
             stream_center: None,
             seed,
+            total_solid_blocks: 0,
         }
     }
 
-    /// Atualiza o streaming a partir da câmera e dos chunks protegidos pela física.
-    ///
-    /// A geração dos chunks ausentes é feita em paralelo com Rayon. A função só
-    /// retorna quando o lote está pronto, evitando que a física avance sobre um
-    /// chunk ainda sem collider.
+    /// Atualiza os conjuntos desejados e gera no máximo `generation_budget`
+    /// chunks nesta chamada. O lote selecionado continua sendo processado em
+    /// paralelo com Rayon, mas o custo total de cada frame fica limitado.
     pub fn stream_around(
         &mut self,
         world_position: Vec3,
@@ -58,80 +58,91 @@ impl VoxelWorld {
         vertical_radius: i32,
         physics_keepalive: &HashSet<ChunkPos>,
         force: bool,
+        generation_budget: usize,
     ) -> StreamDelta {
         let center = ChunkPos::from_world_position(world_position);
-
-        if !force
-            && self.stream_center == Some(center)
-            && self.physics_keepalive.eq(physics_keepalive)
-        {
-            return StreamDelta::default();
+        let horizontal_radius = horizontal_radius.max(0);
+        let vertical_radius = vertical_radius.max(0);
+        let radius_config = (horizontal_radius, vertical_radius);
+        let shape_changed = self.render_radius_config != radius_config;
+        if shape_changed {
+            self.render_offsets = build_render_offsets(horizontal_radius, vertical_radius);
+            self.render_radius_config = radius_config;
         }
 
-        self.stream_center = Some(center);
+        let sets_changed = force
+            || shape_changed
+            || self.stream_center != Some(center)
+            || !self.physics_keepalive.eq(physics_keepalive);
 
-        let render_desired = desired_render_chunks(
-            center,
-            horizontal_radius.max(0),
-            vertical_radius.max(0),
-        );
+        let mut delta = StreamDelta::default();
 
-        let mut delta = StreamDelta {
-            render_added: render_desired
+        if sets_changed {
+            self.stream_center = Some(center);
+
+            let render_desired = desired_render_chunks(center, &self.render_offsets);
+
+            delta.render_added = render_desired
                 .difference(&self.render_chunks)
                 .copied()
-                .collect(),
-            render_removed: self
+                .collect();
+            delta.render_removed = self
                 .render_chunks
                 .difference(&render_desired)
                 .copied()
-                .collect(),
-            physics_added: physics_keepalive
+                .collect();
+            delta.physics_added = physics_keepalive
                 .difference(&self.physics_keepalive)
                 .copied()
-                .collect(),
-            physics_removed: self
+                .collect();
+            delta.physics_removed = self
                 .physics_keepalive
                 .difference(physics_keepalive)
                 .copied()
-                .collect(),
-            ..StreamDelta::default()
-        };
+                .collect();
 
-        self.render_chunks = render_desired;
-        self.physics_keepalive = physics_keepalive.clone();
+            self.render_chunks = render_desired;
+            self.physics_keepalive = physics_keepalive.clone();
 
-        let mut loaded_desired = self.render_chunks.clone();
-        loaded_desired.extend(self.physics_keepalive.iter().copied());
+            let existing = self.chunks.keys().copied().collect::<Vec<_>>();
+            for position in existing {
+                if self.is_loaded_desired(position) {
+                    continue;
+                }
 
-        let existing = self.chunks.keys().copied().collect::<Vec<_>>();
-        for position in existing {
-            if loaded_desired.contains(&position) {
+                if let Some(chunk) = self.chunks.remove(&position) {
+                    self.total_solid_blocks -= chunk.solid_count();
+                }
+                self.dirty.remove(&position);
+                delta.unloaded.push(position);
+                self.mark_loaded_neighbors_dirty(position);
+            }
+
+            self.rebuild_generation_queue(center);
+        }
+
+        let mut batch = Vec::with_capacity(generation_budget.min(self.pending_generation.len()));
+        while batch.len() < generation_budget {
+            let Some(position) = self.pending_generation.pop_front() else {
+                break;
+            };
+
+            // A fila pode conter entradas obsoletas após uma troca rápida de raio.
+            if !self.is_loaded_desired(position) || self.chunks.contains_key(&position) {
                 continue;
             }
 
-            self.chunks.remove(&position);
-            self.dirty.remove(&position);
-            delta.unloaded.push(position);
-            self.mark_loaded_neighbors_dirty(position);
+            batch.push(position);
         }
 
-        let mut missing = loaded_desired
-            .into_iter()
-            .filter(|position| !self.chunks.contains_key(position))
-            .collect::<Vec<_>>();
-
-        // A ordenação deixa a aplicação dos resultados determinística e prioriza
-        // os chunks próximos da câmera, mesmo que a geração ocorra em paralelo.
-        missing.sort_unstable_by_key(|position| chunk_distance_squared(*position, center));
-
         let seed = self.seed;
-        let generated = missing
+        let generated = batch
             .into_par_iter()
             .map(|position| (position, generate_chunk(position, seed)))
             .collect::<Vec<_>>();
 
         for (position, chunk) in generated {
+            self.total_solid_blocks += chunk.solid_count();
             self.chunks.insert(position, chunk);
             delta.loaded.push(position);
             self.mark_dirty_with_neighbors(position);
@@ -146,10 +157,16 @@ impl VoxelWorld {
         self.dirty.clear();
         self.render_chunks.clear();
         self.physics_keepalive.clear();
+        self.render_offsets.clear();
+        self.render_offsets.push(IVec3::ZERO);
+        self.render_radius_config = (0, 0);
+        self.pending_generation.clear();
         self.stream_center = None;
+        self.total_solid_blocks = 0;
         removed
     }
 
+    #[inline]
     pub fn get_block(&self, world: IVec3) -> BlockId {
         let chunk_position = ChunkPos::from_world_block(world);
         let Some(chunk) = self.chunks.get(&chunk_position) else {
@@ -165,8 +182,16 @@ impl VoxelWorld {
             return false;
         };
 
+        let previous = chunk.get(world_to_local(world));
         if !chunk.set(world_to_local(world), block) {
             return false;
+        }
+
+        if previous.is_solid() {
+            self.total_solid_blocks -= 1;
+        }
+        if block.is_solid() {
+            self.total_solid_blocks += 1;
         }
 
         self.mark_dirty_with_neighbors(chunk_position);
@@ -189,6 +214,10 @@ impl VoxelWorld {
         self.physics_keepalive.contains(&position)
     }
 
+    pub fn physics_chunks(&self) -> impl Iterator<Item = ChunkPos> + '_ {
+        self.physics_keepalive.iter().copied()
+    }
+
     pub fn chunk_count(&self) -> usize {
         self.chunks.len()
     }
@@ -202,7 +231,11 @@ impl VoxelWorld {
     }
 
     pub fn solid_block_count(&self) -> usize {
-        self.chunks.values().map(Chunk::solid_count).sum()
+        self.total_solid_blocks
+    }
+
+    pub fn pending_generation_count(&self) -> usize {
+        self.pending_generation.len()
     }
 
     pub fn current_center(&self) -> Option<ChunkPos> {
@@ -211,6 +244,34 @@ impl VoxelWorld {
 
     pub fn take_dirty(&mut self) -> Vec<ChunkPos> {
         self.dirty.drain().collect()
+    }
+
+    fn rebuild_generation_queue(&mut self, center: ChunkPos) {
+        let mut missing = self
+            .render_chunks
+            .iter()
+            .chain(self.physics_keepalive.iter())
+            .copied()
+            .filter(|position| !self.chunks.contains_key(position))
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+
+        missing.sort_unstable_by_key(|position| {
+            let physics_priority = if self.physics_keepalive.contains(position) {
+                0_i32
+            } else {
+                1_i32
+            };
+            (physics_priority, chunk_distance_squared(*position, center))
+        });
+
+        self.pending_generation = missing.into();
+    }
+
+    #[inline]
+    fn is_loaded_desired(&self, position: ChunkPos) -> bool {
+        self.render_chunks.contains(&position) || self.physics_keepalive.contains(&position)
     }
 
     fn mark_dirty_with_neighbors(&mut self, position: ChunkPos) {
@@ -229,31 +290,36 @@ impl VoxelWorld {
     }
 }
 
-fn desired_render_chunks(
-    center: ChunkPos,
-    horizontal_radius: i32,
-    vertical_radius: i32,
-) -> HashSet<ChunkPos> {
-    let mut desired = HashSet::new();
+fn build_render_offsets(horizontal_radius: i32, vertical_radius: i32) -> Vec<IVec3> {
     let radius_squared = horizontal_radius * horizontal_radius;
+    let mut offsets = Vec::new();
 
     for y in -vertical_radius..=vertical_radius {
         for z in -horizontal_radius..=horizontal_radius {
             for x in -horizontal_radius..=horizontal_radius {
-                // Raio cilíndrico: economiza chunks nos cantos do quadrado e
-                // produz uma distância visual mais uniforme.
-                if x * x + z * z > radius_squared {
-                    continue;
+                if x * x + z * z <= radius_squared {
+                    offsets.push(IVec3::new(x, y, z));
                 }
-
-                desired.insert(ChunkPos::new(center.x + x, center.y + y, center.z + z));
             }
         }
     }
 
+    offsets
+}
+
+fn desired_render_chunks(center: ChunkPos, offsets: &[IVec3]) -> HashSet<ChunkPos> {
+    let mut desired = HashSet::with_capacity(offsets.len());
+    desired.extend(offsets.iter().map(|offset| {
+        ChunkPos::new(
+            center.x + offset.x,
+            center.y + offset.y,
+            center.z + offset.z,
+        )
+    }));
     desired
 }
 
+#[inline]
 fn chunk_distance_squared(position: ChunkPos, center: ChunkPos) -> i64 {
     let x = i64::from(position.x - center.x);
     let y = i64::from(position.y - center.y);
@@ -274,11 +340,27 @@ mod tests {
             2,
             &HashSet::new(),
             true,
+            usize::MAX,
         );
 
         assert_eq!(delta.loaded.len(), 5);
         assert!(delta.loaded.iter().any(|position| position.y == -1));
         assert!(delta.loaded.iter().any(|position| position.y == 3));
+    }
+
+    #[test]
+    fn generation_budget_is_respected() {
+        let mut world = VoxelWorld::new(123);
+        let delta = world.stream_around(
+            Vec3::ZERO,
+            4,
+            2,
+            &HashSet::new(),
+            true,
+            3,
+        );
+        assert_eq!(delta.loaded.len(), 3);
+        assert!(world.pending_generation_count() > 0);
     }
 
     #[test]
@@ -290,6 +372,7 @@ mod tests {
             0,
             &HashSet::new(),
             true,
+            usize::MAX,
         );
         let lower = world.current_center();
 
@@ -299,6 +382,7 @@ mod tests {
             0,
             &HashSet::new(),
             false,
+            usize::MAX,
         );
         let upper = world.current_center();
 
@@ -311,10 +395,17 @@ mod tests {
         let mut world = VoxelWorld::new(123);
         let protected = HashSet::from([ChunkPos::new(10, 0, 0)]);
 
-        world.stream_around(Vec3::ZERO, 0, 0, &protected, true);
+        world.stream_around(Vec3::ZERO, 0, 0, &protected, true, usize::MAX);
         assert!(world.contains_chunk(ChunkPos::new(10, 0, 0)));
 
-        world.stream_around(Vec3::new(64.0, 0.0, 0.0), 0, 0, &protected, false);
+        world.stream_around(
+            Vec3::new(64.0, 0.0, 0.0),
+            0,
+            0,
+            &protected,
+            false,
+            usize::MAX,
+        );
         assert!(world.contains_chunk(ChunkPos::new(10, 0, 0)));
         assert!(!world.is_render_visible(ChunkPos::new(10, 0, 0)));
     }

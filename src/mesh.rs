@@ -26,6 +26,38 @@ impl Vertex {
     }
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct InstanceData {
+    pub model: [[f32; 4]; 4],
+    pub color: [f32; 4],
+}
+
+impl InstanceData {
+    const ATTRIBUTES: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![
+        3 => Float32x4,
+        4 => Float32x4,
+        5 => Float32x4,
+        6 => Float32x4,
+        7 => Float32x4,
+    ];
+
+    pub fn new(model: Mat4, color: [f32; 3]) -> Self {
+        Self {
+            model: model.to_cols_array_2d(),
+            color: [color[0], color[1], color[2], 1.0],
+        }
+    }
+
+    pub fn layout() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: mem::size_of::<InstanceData>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &Self::ATTRIBUTES,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct MeshData {
     pub vertices: Vec<Vertex>,
@@ -33,6 +65,13 @@ pub struct MeshData {
 }
 
 impl MeshData {
+    pub fn with_capacity(vertices: usize, indices: usize) -> Self {
+        Self {
+            vertices: Vec::with_capacity(vertices),
+            indices: Vec::with_capacity(indices),
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         self.indices.is_empty()
     }
@@ -47,6 +86,12 @@ impl MeshData {
         self.indices
             .extend(other.indices.iter().map(|index| index + offset));
     }
+}
+
+pub fn unit_cube_mesh() -> MeshData {
+    let mut mesh = MeshData::with_capacity(24, 36);
+    append_cube(&mut mesh, Mat4::IDENTITY, [1.0, 1.0, 1.0]);
+    mesh
 }
 
 pub fn append_cube(mesh: &mut MeshData, transform: Mat4, color: [f32; 3]) {

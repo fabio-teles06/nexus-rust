@@ -52,33 +52,65 @@ impl ChunkPos {
 #[derive(Debug, Clone)]
 pub struct Chunk {
     blocks: Vec<BlockId>,
+    solid_count: usize,
 }
 
 impl Chunk {
     pub fn empty() -> Self {
         Self {
             blocks: vec![AIR; CHUNK_VOLUME],
+            solid_count: 0,
         }
     }
 
+    pub fn filled(block: BlockId) -> Self {
+        Self {
+            blocks: vec![block; CHUNK_VOLUME],
+            solid_count: if block.is_solid() { CHUNK_VOLUME } else { 0 },
+        }
+    }
+
+    #[inline]
     pub fn get(&self, local: IVec3) -> BlockId {
         self.blocks[index(local)]
     }
 
+    #[inline]
     pub fn set(&mut self, local: IVec3, block: BlockId) -> bool {
         let index = index(local);
-        if self.blocks[index] == block {
+        let previous = self.blocks[index];
+        if previous == block {
             return false;
         }
+
+        if previous.is_solid() {
+            self.solid_count -= 1;
+        }
+        if block.is_solid() {
+            self.solid_count += 1;
+        }
+
         self.blocks[index] = block;
         true
     }
 
-    pub fn solid_count(&self) -> usize {
-        self.blocks.iter().filter(|block| block.is_solid()).count()
+    #[inline]
+    pub const fn solid_count(&self) -> usize {
+        self.solid_count
+    }
+
+    #[inline]
+    pub const fn is_empty(&self) -> bool {
+        self.solid_count == 0
+    }
+
+    #[inline]
+    pub const fn is_full(&self) -> bool {
+        self.solid_count == CHUNK_VOLUME
     }
 }
 
+#[inline]
 pub fn world_to_local(block: IVec3) -> IVec3 {
     IVec3::new(
         block.x.rem_euclid(CHUNK_SIZE),
@@ -87,6 +119,7 @@ pub fn world_to_local(block: IVec3) -> IVec3 {
     )
 }
 
+#[inline]
 fn index(local: IVec3) -> usize {
     debug_assert!((0..CHUNK_SIZE).contains(&local.x));
     debug_assert!((0..CHUNK_SIZE).contains(&local.y));
@@ -95,10 +128,10 @@ fn index(local: IVec3) -> usize {
     (local.x + local.z * CHUNK_SIZE + local.y * CHUNK_SIZE * CHUNK_SIZE) as usize
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::voxel::STONE;
 
     #[test]
     fn converts_negative_world_coordinates() {
@@ -111,5 +144,15 @@ mod tests {
     fn vertical_chunks_have_distinct_origins() {
         assert_eq!(ChunkPos::new(0, 2, 0).world_origin(), IVec3::new(0, 32, 0));
         assert_eq!(ChunkPos::new(0, -2, 0).world_origin(), IVec3::new(0, -32, 0));
+    }
+
+    #[test]
+    fn caches_solid_count() {
+        let mut chunk = Chunk::empty();
+        assert_eq!(chunk.solid_count(), 0);
+        chunk.set(IVec3::ZERO, STONE);
+        assert_eq!(chunk.solid_count(), 1);
+        chunk.set(IVec3::ZERO, AIR);
+        assert_eq!(chunk.solid_count(), 0);
     }
 }

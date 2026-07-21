@@ -5,32 +5,54 @@ use super::{
     chunk::{CHUNK_SIZE, Chunk, ChunkPos},
 };
 
+const BEDROCK_Y: i32 = -32;
+const MIN_TERRAIN_HEIGHT: i32 = 4;
+const MAX_TERRAIN_HEIGHT: i32 = 44;
+
 pub fn generate_chunk(position: ChunkPos, seed: u32) -> Chunk {
-    let mut chunk = Chunk::empty();
     let origin = position.world_origin();
+    let top = origin.y + CHUNK_SIZE - 1;
 
-    for y in 0..CHUNK_SIZE {
-        for z in 0..CHUNK_SIZE {
-            for x in 0..CHUNK_SIZE {
-                let local = IVec3::new(x, y, z);
-                let world = origin + local;
-                let height = terrain_height(world.x, world.z, seed);
+    // Chunks completamente acima do terreno ou abaixo da camada de bedrock
+    // não precisam executar o gerador bloco a bloco.
+    if origin.y > MAX_TERRAIN_HEIGHT || top < BEDROCK_Y {
+        return Chunk::empty();
+    }
 
-                let block = if world.y < -32 {
-                    continue;
-                } else if world.y == -32 {
+    // Entre a bedrock e a menor altura possível do terreno, todo o chunk é pedra.
+    if origin.y > BEDROCK_Y && top < MIN_TERRAIN_HEIGHT {
+        return Chunk::filled(STONE);
+    }
+
+    let mut chunk = Chunk::empty();
+
+    // A altura depende apenas de X/Z. Calculá-la uma vez por coluna reduz as
+    // chamadas trigonométricas de 4096 para 256 por chunk.
+    for z in 0..CHUNK_SIZE {
+        for x in 0..CHUNK_SIZE {
+            let world_x = origin.x + x;
+            let world_z = origin.z + z;
+            let height = terrain_height(world_x, world_z, seed);
+
+            let local_min_y = (BEDROCK_Y - origin.y).max(0);
+            let local_max_y = (height - origin.y).min(CHUNK_SIZE - 1);
+            if local_min_y > local_max_y {
+                continue;
+            }
+
+            for y in local_min_y..=local_max_y {
+                let world_y = origin.y + y;
+                let block = if world_y == BEDROCK_Y {
                     BEDROCK
-                } else if world.y > height {
-                    continue;
-                } else if world.y == height {
+                } else if world_y == height {
                     GRASS
-                } else if world.y >= height - 3 {
+                } else if world_y >= height - 3 {
                     DIRT
                 } else {
                     STONE
                 };
 
-                chunk.set(local, block);
+                chunk.set(IVec3::new(x, y, z), block);
             }
         }
     }
@@ -38,6 +60,7 @@ pub fn generate_chunk(position: ChunkPos, seed: u32) -> Chunk {
     chunk
 }
 
+#[inline]
 fn terrain_height(x: i32, z: i32, seed: u32) -> i32 {
     let seed_offset = seed as f32 * 0.001;
     let x = x as f32;

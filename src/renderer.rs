@@ -5,8 +5,7 @@ use std::{
     sync::Arc,
 };
 
-use glam::Mat4;
-use wgpu::util::DeviceExt;
+use glam::{Mat4, Vec3};
 use winit::{
     dpi::PhysicalSize,
     event_loop::OwnedDisplayHandle,
@@ -15,8 +14,8 @@ use winit::{
 
 use crate::{
     frustum::Frustum,
-    mesh::{MeshData, Vertex},
-    voxel::ChunkPos,
+    mesh::{InstanceData, MeshData, Vertex, unit_cube_mesh},
+    voxel::{CHUNK_SIZE, ChunkPos},
 };
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
@@ -36,31 +35,97 @@ pub struct RenderStats {
 struct GpuMesh {
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
+    vertex_capacity: u64,
+    index_capacity: u64,
     index_count: u32,
 }
 
 impl GpuMesh {
-    fn new(device: &wgpu::Device, label: &str, mesh: &MeshData) -> Option<Self> {
+    fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        label: &str,
+        mesh: &MeshData,
+    ) -> Option<Self> {
         if mesh.is_empty() {
             return None;
         }
 
-        let vertex_label = format!("{label} vertex buffer");
-        let index_label = format!("{label} index buffer");
+        let vertex_bytes = bytemuck::cast_slice(&mesh.vertices);
+        let index_bytes = bytemuck::cast_slice(&mesh.indices);
+        let vertex_capacity = buffer_capacity(vertex_bytes.len() as u64);
+        let index_capacity = buffer_capacity(index_bytes.len() as u64);
+
+        let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size: vertex_capacity,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size: index_capacity,
+            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&vertex_buffer, 0, vertex_bytes);
+        queue.write_buffer(&index_buffer, 0, index_bytes);
 
         Some(Self {
-            vertex_buffer: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some(&vertex_label),
-                contents: bytemuck::cast_slice(&mesh.vertices),
-                usage: wgpu::BufferUsages::VERTEX,
-            }),
-            index_buffer: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some(&index_label),
-                contents: bytemuck::cast_slice(&mesh.indices),
-                usage: wgpu::BufferUsages::INDEX,
-            }),
+            vertex_buffer,
+            index_buffer,
+            vertex_capacity,
+            index_capacity,
             index_count: mesh.indices.len() as u32,
         })
+    }
+
+    fn update(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        label: &str,
+        mesh: &MeshData,
+    ) {
+        let vertex_bytes = bytemuck::cast_slice(&mesh.vertices);
+        let index_bytes = bytemuck::cast_slice(&mesh.indices);
+
+        if vertex_bytes.len() as u64 > self.vertex_capacity {
+            self.vertex_capacity = buffer_capacity(vertex_bytes.len() as u64);
+            self.vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: self.vertex_capacity,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+        }
+        if index_bytes.len() as u64 > self.index_capacity {
+            self.index_capacity = buffer_capacity(index_bytes.len() as u64);
+            self.index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: self.index_capacity,
+                usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+        }
+
+        queue.write_buffer(&self.vertex_buffer, 0, vertex_bytes);
+        queue.write_buffer(&self.index_buffer, 0, index_bytes);
+        self.index_count = mesh.indices.len() as u32;
+    }
+}
+
+struct ChunkGpuMesh {
+    mesh: GpuMesh,
+    min: Vec3,
+    max: Vec3,
+}
+
+impl ChunkGpuMesh {
+    fn new(position: ChunkPos, mesh: GpuMesh) -> Self {
+        let min = position.world_origin().as_vec3();
+        let max = min + Vec3::splat(CHUNK_SIZE as f32);
+        Self { mesh, min, max }
     }
 }
 
@@ -101,11 +166,15 @@ pub struct Renderer {
     surface: wgpu::Surface<'static>,
     surface_config: wgpu::SurfaceConfiguration,
     render_pipeline: wgpu::RenderPipeline,
+    instance_pipeline: wgpu::RenderPipeline,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     depth: DepthTexture,
-    chunk_meshes: HashMap<ChunkPos, GpuMesh>,
-    dynamic_mesh: Option<GpuMesh>,
+    chunk_meshes: HashMap<ChunkPos, ChunkGpuMesh>,
+    instance_cube: GpuMesh,
+    instance_buffer: wgpu::Buffer,
+    instance_capacity: u64,
+    instance_count: u32,
     last_render_stats: RenderStats,
     size: PhysicalSize<u32>,
 }
@@ -158,11 +227,13 @@ impl Renderer {
         let camera_uniform = CameraUniform {
             view_projection: Mat4::IDENTITY.to_cols_array_2d(),
         };
-        let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let camera_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Camera uniform buffer"),
-            contents: bytemuck::bytes_of(&camera_uniform),
+            size: mem::size_of::<CameraUniform>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
+        queue.write_buffer(&camera_buffer, 0, bytemuck::bytes_of(&camera_uniform));
 
         let camera_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Camera bind group layout"),
@@ -197,8 +268,26 @@ impl Renderer {
             bind_group_layouts: &[Some(&camera_layout)],
             immediate_size: 0,
         });
+
+        let primitive = wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            strip_index_format: None,
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: Some(wgpu::Face::Back),
+            polygon_mode: wgpu::PolygonMode::Fill,
+            unclipped_depth: false,
+            conservative: false,
+        };
+        let depth_stencil = Some(wgpu::DepthStencilState {
+            format: DEPTH_FORMAT,
+            depth_write_enabled: Some(true),
+            depth_compare: Some(wgpu::CompareFunction::Less),
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        });
+
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Nexus render pipeline"),
+            label: Some("Nexus chunk pipeline"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
@@ -212,27 +301,50 @@ impl Renderer {
                 targets: &[Some(surface_config.format.into())],
                 compilation_options: Default::default(),
             }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::Less),
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
+            primitive: primitive.clone(),
+            depth_stencil: depth_stencil.clone(),
             multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
             cache: None,
         });
+
+        let instance_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Nexus instance pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_instanced"),
+                buffers: &[Vertex::layout(), InstanceData::layout()],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(surface_config.format.into())],
+                compilation_options: Default::default(),
+            }),
+            primitive,
+            depth_stencil,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+
         let depth = DepthTexture::new(&device, &surface_config);
+        let instance_cube = GpuMesh::new(
+            &device,
+            &queue,
+            "Dynamic cube mesh",
+            &unit_cube_mesh(),
+        )
+        .ok_or_else(|| "Não foi possível criar a mesh do cubo".to_string())?;
+        let instance_capacity = buffer_capacity(mem::size_of::<InstanceData>() as u64);
+        let instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Dynamic instance buffer"),
+            size: instance_capacity,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
 
         Ok(Self {
             instance,
@@ -242,11 +354,15 @@ impl Renderer {
             surface,
             surface_config,
             render_pipeline,
+            instance_pipeline,
             camera_buffer,
             camera_bind_group,
             depth,
             chunk_meshes: HashMap::new(),
-            dynamic_mesh: None,
+            instance_cube,
+            instance_buffer,
+            instance_capacity,
+            instance_count: 0,
             last_render_stats: RenderStats::default(),
             size,
         })
@@ -276,13 +392,26 @@ impl Renderer {
     }
 
     pub fn upsert_chunk(&mut self, position: ChunkPos, mesh: &MeshData) {
-        match GpuMesh::new(&self.device, "Chunk", mesh) {
-            Some(mesh) => {
-                self.chunk_meshes.insert(position, mesh);
-            }
-            None => {
-                self.chunk_meshes.remove(&position);
-            }
+        if mesh.is_empty() {
+            self.chunk_meshes.remove(&position);
+            return;
+        }
+
+        if let Some(existing) = self.chunk_meshes.get_mut(&position) {
+            existing
+                .mesh
+                .update(&self.device, &self.queue, "Chunk mesh", mesh);
+            return;
+        }
+
+        if let Some(gpu_mesh) = GpuMesh::new(
+            &self.device,
+            &self.queue,
+            "Chunk mesh",
+            mesh,
+        ) {
+            self.chunk_meshes
+                .insert(position, ChunkGpuMesh::new(position, gpu_mesh));
         }
     }
 
@@ -290,8 +419,23 @@ impl Renderer {
         self.chunk_meshes.remove(&position);
     }
 
-    pub fn upload_dynamic_mesh(&mut self, mesh: &MeshData) {
-        self.dynamic_mesh = GpuMesh::new(&self.device, "Dynamic entities", mesh);
+    pub fn update_instances(&mut self, instances: &[InstanceData]) {
+        self.instance_count = instances.len() as u32;
+        if instances.is_empty() {
+            return;
+        }
+
+        let bytes = bytemuck::cast_slice(instances);
+        if bytes.len() as u64 > self.instance_capacity {
+            self.instance_capacity = buffer_capacity(bytes.len() as u64);
+            self.instance_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Dynamic instance buffer"),
+                size: self.instance_capacity,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+        }
+        self.queue.write_buffer(&self.instance_buffer, 0, bytes);
     }
 
     pub fn render_stats(&self) -> RenderStats {
@@ -372,7 +516,7 @@ impl Renderer {
                     view: &self.depth.view,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Store,
+                        store: wgpu::StoreOp::Discard,
                     }),
                     stencil_ops: None,
                 }),
@@ -384,16 +528,28 @@ impl Renderer {
             pass.set_pipeline(&self.render_pipeline);
             pass.set_bind_group(0, &self.camera_bind_group, &[]);
 
-            for (position, mesh) in &self.chunk_meshes {
-                if frustum.intersects_chunk(*position) {
-                    draw_mesh(&mut pass, mesh);
+            for chunk in self.chunk_meshes.values() {
+                if frustum.intersects_aabb(chunk.min, chunk.max) {
+                    draw_mesh(&mut pass, &chunk.mesh);
                     render_stats.visible_chunks += 1;
                 } else {
                     render_stats.culled_chunks += 1;
                 }
             }
-            if let Some(mesh) = &self.dynamic_mesh {
-                draw_mesh(&mut pass, mesh);
+
+            if self.instance_count > 0 {
+                pass.set_pipeline(&self.instance_pipeline);
+                pass.set_vertex_buffer(0, self.instance_cube.vertex_buffer.slice(..));
+                pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
+                pass.set_index_buffer(
+                    self.instance_cube.index_buffer.slice(..),
+                    wgpu::IndexFormat::Uint32,
+                );
+                pass.draw_indexed(
+                    0..self.instance_cube.index_count,
+                    0,
+                    0..self.instance_count,
+                );
             }
         }
 
@@ -418,4 +574,9 @@ fn draw_mesh<'a>(pass: &mut wgpu::RenderPass<'a>, mesh: &'a GpuMesh) {
     pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
     pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
     pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+}
+
+#[inline]
+fn buffer_capacity(required: u64) -> u64 {
+    required.max(4).next_power_of_two()
 }

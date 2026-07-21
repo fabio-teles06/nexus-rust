@@ -18,6 +18,11 @@ pub struct PhysicsWorld {
     multibody_joints: MultibodyJointSet,
     ccd_solver: CCDSolver,
     chunk_colliders: HashMap<ChunkPos, ColliderHandle>,
+    processed_chunk_colliders: HashSet<ChunkPos>,
+    keepalive_cache: HashSet<ChunkPos>,
+    keepalive_body_chunks: HashMap<RigidBodyHandle, ChunkPos>,
+    keepalive_parameters: (i32, i32, i32),
+    keepalive_dirty: bool,
     paused: bool,
 }
 
@@ -36,6 +41,11 @@ impl PhysicsWorld {
             multibody_joints: MultibodyJointSet::new(),
             ccd_solver: CCDSolver::new(),
             chunk_colliders: HashMap::new(),
+            processed_chunk_colliders: HashSet::new(),
+            keepalive_cache: HashSet::new(),
+            keepalive_body_chunks: HashMap::new(),
+            keepalive_parameters: (-1, -1, -1),
+            keepalive_dirty: true,
             paused: false,
         }
     }
@@ -78,12 +88,14 @@ impl PhysicsWorld {
             .build();
         self.colliders
             .insert_with_parent(collider, handle, &mut self.bodies);
+        self.keepalive_dirty = true;
 
         handle
     }
 
     pub fn upsert_chunk_collider(&mut self, position: ChunkPos, mesh: &MeshData) {
         self.remove_chunk_collider(position);
+        self.processed_chunk_colliders.insert(position);
         if mesh.is_empty() {
             return;
         }
@@ -107,6 +119,7 @@ impl PhysicsWorld {
             .collect::<Vec<_>>();
 
         let Ok(builder) = ColliderBuilder::trimesh(vertices, triangles) else {
+            self.processed_chunk_colliders.remove(&position);
             log::warn!("Não foi possível criar collider do chunk {position:?}");
             return;
         };
@@ -118,6 +131,7 @@ impl PhysicsWorld {
     }
 
     pub fn remove_chunk_collider(&mut self, position: ChunkPos) {
+        self.processed_chunk_colliders.remove(&position);
         let Some(handle) = self.chunk_colliders.remove(&position) else {
             return;
         };
@@ -126,7 +140,11 @@ impl PhysicsWorld {
     }
 
     pub fn clear_chunk_colliders(&mut self) {
-        let positions = self.chunk_colliders.keys().copied().collect::<Vec<_>>();
+        let positions = self
+            .processed_chunk_colliders
+            .iter()
+            .copied()
+            .collect::<Vec<_>>();
         for position in positions {
             self.remove_chunk_collider(position);
         }
@@ -140,7 +158,7 @@ impl PhysicsWorld {
     /// objetos em queda. Como o carregamento é concluído antes do próximo passo
     /// da física, o volume protegido acompanha os corpos sem criar buracos.
     pub fn required_chunk_keepalive(
-        &self,
+        &mut self,
         horizontal_radius: i32,
         below: i32,
         above: i32,
@@ -148,17 +166,36 @@ impl PhysicsWorld {
         let horizontal_radius = horizontal_radius.max(0);
         let below = below.max(0);
         let above = above.max(0);
+        let parameters = (horizontal_radius, below, above);
+
+        let current_body_chunks = self
+            .bodies
+            .iter()
+            .map(|(handle, body)| {
+                let translation = body.translation();
+                let chunk = ChunkPos::from_world_position(Vec3::new(
+                    translation.x,
+                    translation.y,
+                    translation.z,
+                ));
+                (handle, chunk)
+            })
+            .collect::<HashMap<_, _>>();
+
+        if !self.keepalive_dirty
+            && self.keepalive_parameters == parameters
+            && self.keepalive_body_chunks == current_body_chunks
+        {
+            return self.keepalive_cache.clone();
+        }
+
+        self.keepalive_dirty = false;
+        self.keepalive_parameters = parameters;
+        self.keepalive_body_chunks = current_body_chunks;
+        self.keepalive_cache.clear();
+
         let radius_squared = horizontal_radius * horizontal_radius;
-        let mut chunks = HashSet::new();
-
-        for (_, body) in self.bodies.iter() {
-            let translation = body.translation();
-            let center = ChunkPos::from_world_position(Vec3::new(
-                translation.x,
-                translation.y,
-                translation.z,
-            ));
-
+        for center in self.keepalive_body_chunks.values().copied() {
             for y in -below..=above {
                 for z in -horizontal_radius..=horizontal_radius {
                     for x in -horizontal_radius..=horizontal_radius {
@@ -166,7 +203,7 @@ impl PhysicsWorld {
                             continue;
                         }
 
-                        chunks.insert(ChunkPos::new(
+                        self.keepalive_cache.insert(ChunkPos::new(
                             center.x + x,
                             center.y + y,
                             center.z + z,
@@ -176,7 +213,12 @@ impl PhysicsWorld {
             }
         }
 
-        chunks
+        self.keepalive_cache.clone()
+    }
+
+
+    pub fn has_processed_chunk(&self, position: ChunkPos) -> bool {
+        self.processed_chunk_colliders.contains(&position)
     }
 
     pub fn bodies(&self) -> &RigidBodySet {

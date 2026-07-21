@@ -74,7 +74,7 @@ impl ApplicationHandler for App {
         let size = window.inner_size();
         let mut game = Game::new(size.width, size.height);
         sync_chunks(&mut renderer, &mut game);
-        renderer.upload_dynamic_mesh(&game.dynamic_mesh());
+        renderer.update_instances(game.dynamic_instances());
 
         let gui = DebugGui::new(
             &window,
@@ -234,13 +234,18 @@ impl App {
 
         sync_chunks(renderer, game);
 
-        let render_stats = renderer.render_stats();
-        let snapshot = game.debug_snapshot(
-            delta_time,
-            render_stats.visible_chunks,
-            render_stats.culled_chunks,
-        );
-        let (gui_frame, actions) = gui.begin_frame(window, &snapshot);
+        let (gui_frame, actions) = if gui.visible() {
+            let render_stats = renderer.render_stats();
+            let snapshot = game.debug_snapshot(
+                delta_time,
+                render_stats.visible_chunks,
+                render_stats.culled_chunks,
+            );
+            let (frame, actions) = gui.begin_frame(window, &snapshot);
+            (Some(frame), actions)
+        } else {
+            (None, gui.current_actions())
+        };
 
         game.set_physics_paused(actions.physics_paused);
         game.set_gravity_y(actions.gravity_y);
@@ -251,11 +256,15 @@ impl App {
             game.regenerate_chunks(actions.horizontal_radius, actions.vertical_radius);
             sync_chunks(renderer, game);
         }
-        renderer.upload_dynamic_mesh(&game.dynamic_mesh());
+        renderer.update_instances(game.dynamic_instances());
 
         let camera = game.camera_matrix();
         renderer.render(camera, |device, queue, encoder, view, size| {
-            gui.paint(device, queue, encoder, view, size, &gui_frame)
+            if let Some(frame) = gui_frame.as_ref() {
+                gui.paint(device, queue, encoder, view, size, frame)
+            } else {
+                Vec::new()
+            }
         });
 
         window.request_redraw();

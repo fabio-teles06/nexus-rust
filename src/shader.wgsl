@@ -11,6 +11,14 @@ struct VertexInput {
     @location(2) color: vec3<f32>,
 }
 
+struct InstanceInput {
+    @location(3) model_0: vec4<f32>,
+    @location(4) model_1: vec4<f32>,
+    @location(5) model_2: vec4<f32>,
+    @location(6) model_3: vec4<f32>,
+    @location(7) color: vec4<f32>,
+}
+
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) normal: vec3<f32>,
@@ -23,6 +31,22 @@ fn vs_main(input: VertexInput) -> VertexOutput {
     output.position = camera.view_projection * vec4<f32>(input.position, 1.0);
     output.normal = input.normal;
     output.color = input.color;
+    return output;
+}
+
+@vertex
+fn vs_instanced(input: VertexInput, instance: InstanceInput) -> VertexOutput {
+    let model = mat4x4<f32>(
+        instance.model_0,
+        instance.model_1,
+        instance.model_2,
+        instance.model_3
+    );
+
+    var output: VertexOutput;
+    output.position = camera.view_projection * model * vec4<f32>(input.position, 1.0);
+    output.normal = normalize((model * vec4<f32>(input.normal, 0.0)).xyz);
+    output.color = input.color * instance.color.xyz;
     return output;
 }
 

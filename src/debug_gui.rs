@@ -92,6 +92,17 @@ impl DebugGui {
         self.visible && self.state.on_mouse_motion(delta)
     }
 
+    pub fn current_actions(&self) -> DebugActions {
+        DebugActions {
+            spawn_cube: false,
+            regenerate_chunks: false,
+            horizontal_radius: self.horizontal_radius,
+            vertical_radius: self.vertical_radius,
+            physics_paused: self.physics_paused,
+            gravity_y: self.gravity_y,
+        }
+    }
+
     pub fn begin_frame(
         &mut self,
         window: &Window,
@@ -119,6 +130,10 @@ impl DebugGui {
                     ui.heading("Runtime");
                     ui.label(format!("FPS: {:.1}", snapshot.fps));
                     ui.label(format!("Frame: {:.2} ms", snapshot.frame_ms));
+                    ui.label(format!(
+                        "CPU: stream {:.2} / mesh {:.2} / física {:.2} ms",
+                        snapshot.stream_ms, snapshot.mesh_ms, snapshot.physics_ms
+                    ));
                     ui.separator();
 
                     ui.heading("Câmera e chunks");
@@ -137,6 +152,11 @@ impl DebugGui {
                     ui.label(format!(
                         "Chunks protegidos pela física: {}",
                         snapshot.physics_keepalive_chunks
+                    ));
+                    ui.label(format!(
+                        "Fila: {} geração / {} mesh",
+                        snapshot.pending_generation_chunks,
+                        snapshot.pending_mesh_chunks
                     ));
                     ui.label(format!(
                         "Frustum: {} visíveis / {} descartados",
@@ -166,7 +186,13 @@ impl DebugGui {
                     ui.label(format!("Gravidade Y: {:.1}", snapshot.gravity_y));
                     ui.label(format!(
                         "Estado: {}",
-                        if snapshot.physics_paused { "pausada" } else { "executando" }
+                        if snapshot.physics_paused {
+                            "pausada"
+                        } else if snapshot.physics_waiting_for_chunks {
+                            "aguardando chunks"
+                        } else {
+                            "executando"
+                        }
                     ));
                     if let Some(name) = &snapshot.first_entity_name {
                         ui.label(format!("Primeira entidade: {name}"));
