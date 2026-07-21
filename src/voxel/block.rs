@@ -6,6 +6,7 @@ pub const AIR: BlockId = BlockId(0);
 pub const STONE: BlockId = BlockId(1);
 pub const DIRT: BlockId = BlockId(2);
 pub const GRASS: BlockId = BlockId(3);
+pub const BEDROCK: BlockId = BlockId(4);
 
 impl BlockId {
     pub const fn is_air(self) -> bool {
@@ -16,31 +17,12 @@ impl BlockId {
         !self.is_air()
     }
 
-    pub const fn name(self) -> &'static str {
-        match self.0 {
-            0 => "Air",
-            1 => "Stone",
-            2 => "Dirt",
-            3 => "Grass",
-            _ => "Unknown",
-        }
-    }
-
     pub const fn color(self) -> [f32; 3] {
         match self.0 {
-            // Ar não será renderizado.
-            0 => [0.0, 0.0, 0.0],
-
-            // Pedra
             1 => [0.48, 0.50, 0.54],
-
-            // Terra
-            2 => [0.45, 0.28, 0.14],
-
-            // Grama
-            3 => [0.25, 0.68, 0.24],
-
-            // Bloco desconhecido: magenta para evidenciar o erro.
+            2 => [0.42, 0.25, 0.12],
+            3 => [0.24, 0.67, 0.22],
+            4 => [0.18, 0.18, 0.22],
             _ => [1.0, 0.0, 1.0],
         }
     }

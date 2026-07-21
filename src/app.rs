@@ -6,25 +6,33 @@ use winit::{
     event::{DeviceEvent, DeviceId, ElementState, MouseButton, WindowEvent},
     event_loop::ActiveEventLoop,
     keyboard::{KeyCode, PhysicalKey},
-    window::{Window, WindowId},
+    window::{CursorGrabMode, Window, WindowId},
 };
 
-use crate::{input::InputState, renderer::Renderer};
+use crate::{
+    debug_gui::DebugGui,
+    game::{ChunkRenderUpdate, Game},
+    input::InputState,
+    renderer::Renderer,
+};
 
 pub struct App {
+    window: Option<Arc<Window>>,
     renderer: Option<Renderer>,
-
+    game: Option<Game>,
+    gui: Option<DebugGui>,
     input: InputState,
-
     last_frame: Instant,
-
     mouse_captured: bool,
 }
 
 impl Default for App {
     fn default() -> Self {
         Self {
+            window: None,
             renderer: None,
+            game: None,
+            gui: None,
             input: InputState::default(),
             last_frame: Instant::now(),
             mouse_captured: false,
@@ -34,44 +42,56 @@ impl Default for App {
 
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.renderer.is_some() {
+        if self.window.is_some() {
             return;
         }
 
-        let window_attributes = Window::default_attributes()
-            .with_title("Voxel Prototype")
-            .with_inner_size(LogicalSize::new(1280, 720));
-
-        let window = match event_loop.create_window(window_attributes) {
+        let attributes = Window::default_attributes()
+            .with_title("Nexus Voxel Prototype")
+            .with_inner_size(LogicalSize::new(1280, 720))
+            .with_min_inner_size(LogicalSize::new(800, 450));
+        let window = match event_loop.create_window(attributes) {
             Ok(window) => Arc::new(window),
-
             Err(error) => {
-                eprintln!("Erro ao criar a janela: {error}");
+                log::error!("Erro ao criar janela: {error}");
                 event_loop.exit();
                 return;
             }
         };
 
-        let renderer = pollster::block_on(Renderer::new(
+        let mut renderer = match pollster::block_on(Renderer::new(
             event_loop.owned_display_handle(),
             Arc::clone(&window),
-        ));
-
-        match renderer {
-            Ok(renderer) => {
-                self.mouse_captured = renderer.set_cursor_captured(true);
-
-                self.last_frame = Instant::now();
-
-                self.renderer = Some(renderer);
-                window.request_redraw();
-            }
-
+        )) {
+            Ok(renderer) => renderer,
             Err(error) => {
-                eprintln!("Erro ao iniciar o renderer: {error}");
+                log::error!("{error}");
                 event_loop.exit();
+                return;
             }
-        }
+        };
+
+        let size = window.inner_size();
+        let mut game = Game::new(size.width, size.height);
+        sync_chunks(&mut renderer, &mut game);
+        renderer.upload_dynamic_mesh(&game.dynamic_mesh());
+
+        let gui = DebugGui::new(
+            &window,
+            renderer.device(),
+            renderer.surface_format(),
+            renderer.max_texture_dimension(),
+            game.horizontal_radius(),
+            game.vertical_radius(),
+        );
+
+        self.mouse_captured = set_cursor_captured(&window, true);
+        self.last_frame = Instant::now();
+        self.window = Some(Arc::clone(&window));
+        self.renderer = Some(renderer);
+        self.game = Some(game);
+        self.gui = Some(gui);
+        window.request_redraw();
     }
 
     fn window_event(
@@ -80,83 +100,85 @@ impl ApplicationHandler for App {
         window_id: WindowId,
         event: WindowEvent,
     ) {
-        let Some(renderer) = self.renderer.as_mut() else {
+        let Some(window) = self.window.as_ref() else {
             return;
         };
-
-        if window_id != renderer.window_id() {
+        if window_id != window.id() {
             return;
         }
 
-        match event {
-            WindowEvent::CloseRequested => {
-                event_loop.exit();
-            }
-
-            WindowEvent::KeyboardInput { event, .. } => {
-                let PhysicalKey::Code(key_code) = event.physical_key else {
+        if let WindowEvent::KeyboardInput { event: key, .. } = &event {
+            if key.state == ElementState::Pressed && !key.repeat {
+                if key.physical_key == PhysicalKey::Code(KeyCode::F1) {
+                    let visible = if let Some(gui) = self.gui.as_mut() {
+                        gui.toggle()
+                    } else {
+                        false
+                    };
+                    self.input.clear();
+                    self.mouse_captured = set_cursor_captured(window, !visible);
                     return;
-                };
+                }
 
-                if key_code == KeyCode::Escape
-                    && event.state == ElementState::Pressed
-                    && !event.repeat
-                {
-                    if self.mouse_captured {
-                        renderer.set_cursor_captured(false);
-
-                        self.mouse_captured = false;
+                if key.physical_key == PhysicalKey::Code(KeyCode::Escape) {
+                    if self.gui.as_ref().is_some_and(|gui| gui.visible()) {
+                        if let Some(gui) = self.gui.as_mut() {
+                            gui.hide();
+                        }
+                        self.mouse_captured = set_cursor_captured(window, true);
+                    } else if self.mouse_captured {
+                        self.mouse_captured = set_cursor_captured(window, false);
                         self.input.clear();
                     } else {
                         event_loop.exit();
                     }
+                    return;
                 }
-
-                self.input.process_key(key_code, event.state);
             }
+        }
 
+        if self
+            .gui
+            .as_mut()
+            .is_some_and(|gui| gui.on_window_event(window, &event))
+        {
+            return;
+        }
+
+        match event {
+            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::KeyboardInput { event, .. } => {
+                if self.gui.as_ref().is_some_and(|gui| gui.visible()) {
+                    return;
+                }
+                if let PhysicalKey::Code(code) = event.physical_key {
+                    self.input.process_key(code, event.state);
+                }
+            }
             WindowEvent::MouseInput {
                 state: ElementState::Pressed,
                 button: MouseButton::Left,
                 ..
             } => {
-                if !self.mouse_captured {
-                    self.mouse_captured = renderer.set_cursor_captured(true);
-
-                    self.input.clear();
-                    self.last_frame = Instant::now();
-
-                    return;
+                if !self.mouse_captured
+                    && !self.gui.as_ref().is_some_and(|gui| gui.visible())
+                {
+                    self.mouse_captured = set_cursor_captured(window, true);
                 }
-
-                renderer.break_targeted_block();
             }
-
             WindowEvent::Focused(false) => {
                 self.input.clear();
-
-                renderer.set_cursor_captured(false);
-
-                self.mouse_captured = false;
+                self.mouse_captured = set_cursor_captured(window, false);
             }
-
             WindowEvent::Resized(size) => {
-                renderer.resize(size);
+                if let Some(renderer) = self.renderer.as_mut() {
+                    renderer.resize(size);
+                }
+                if let Some(game) = self.game.as_mut() {
+                    game.resize(size.width, size.height);
+                }
             }
-
-            WindowEvent::RedrawRequested => {
-                let now = Instant::now();
-
-                let delta_time = now.duration_since(self.last_frame).as_secs_f32().min(0.05);
-
-                self.last_frame = now;
-
-                renderer.update(&mut self.input, delta_time);
-
-                renderer.render();
-                renderer.request_redraw();
-            }
-
+            WindowEvent::RedrawRequested => self.redraw(),
             _ => {}
         }
     }
@@ -167,12 +189,107 @@ impl ApplicationHandler for App {
         _device_id: DeviceId,
         event: DeviceEvent,
     ) {
-        if !self.mouse_captured {
+        let DeviceEvent::MouseMotion { delta } = event else {
+            return;
+        };
+
+        if self
+            .gui
+            .as_mut()
+            .is_some_and(|gui| gui.on_mouse_motion(delta))
+        {
             return;
         }
 
-        if let DeviceEvent::MouseMotion { delta } = event {
+        if self.mouse_captured {
             self.input.add_mouse_delta(delta);
+        }
+    }
+}
+
+impl App {
+    fn redraw(&mut self) {
+        let (Some(window), Some(renderer), Some(game), Some(gui)) = (
+            self.window.as_ref(),
+            self.renderer.as_mut(),
+            self.game.as_mut(),
+            self.gui.as_mut(),
+        ) else {
+            return;
+        };
+
+        let now = Instant::now();
+        let delta_time = now
+            .duration_since(self.last_frame)
+            .as_secs_f32()
+            .clamp(0.0001, 0.05);
+        self.last_frame = now;
+
+        if !gui.visible() {
+            game.update(&mut self.input, delta_time);
+        } else {
+            self.input.clear();
+            game.update(&mut self.input, delta_time);
+        }
+
+        sync_chunks(renderer, game);
+
+        let snapshot = game.debug_snapshot(delta_time);
+        let (gui_frame, actions) = gui.begin_frame(window, &snapshot);
+
+        game.set_physics_paused(actions.physics_paused);
+        game.set_gravity_y(actions.gravity_y);
+        if actions.spawn_cube {
+            game.spawn_cube_in_front();
+        }
+        if actions.regenerate_chunks {
+            game.regenerate_chunks(actions.horizontal_radius, actions.vertical_radius);
+            sync_chunks(renderer, game);
+        }
+        renderer.upload_dynamic_mesh(&game.dynamic_mesh());
+
+        let camera = game.camera_matrix();
+        renderer.render(camera, |device, queue, encoder, view, size| {
+            gui.paint(device, queue, encoder, view, size, &gui_frame)
+        });
+
+        window.request_redraw();
+    }
+}
+
+fn sync_chunks(renderer: &mut Renderer, game: &mut Game) {
+    for update in game.drain_chunk_updates() {
+        match update {
+            ChunkRenderUpdate::Upsert(position, mesh) => {
+                renderer.upsert_chunk(position, &mesh)
+            }
+            ChunkRenderUpdate::Remove(position) => renderer.remove_chunk(position),
+        }
+    }
+}
+
+fn set_cursor_captured(window: &Window, captured: bool) -> bool {
+    if !captured {
+        if let Err(error) = window.set_cursor_grab(CursorGrabMode::None) {
+            log::warn!("Não foi possível liberar cursor: {error}");
+        }
+        window.set_cursor_visible(true);
+        return false;
+    }
+
+    let result = window
+        .set_cursor_grab(CursorGrabMode::Locked)
+        .or_else(|_| window.set_cursor_grab(CursorGrabMode::Confined));
+
+    match result {
+        Ok(()) => {
+            window.set_cursor_visible(false);
+            true
+        }
+        Err(error) => {
+            log::warn!("Não foi possível capturar cursor: {error}");
+            window.set_cursor_visible(true);
+            false
         }
     }
 }

@@ -1,45 +1,104 @@
-use std::{borrow::Cow, mem, sync::Arc};
+use std::{
+    borrow::Cow,
+    collections::HashMap,
+    mem,
+    sync::Arc,
+};
 
+use glam::Mat4;
 use wgpu::util::DeviceExt;
-
 use winit::{
     dpi::PhysicalSize,
     event_loop::OwnedDisplayHandle,
-    window::{CursorGrabMode, Window, WindowId},
+    window::Window,
 };
 
 use crate::{
-    camera::{Camera, CameraUniform},
-    depth::{DEPTH_FORMAT, DepthTexture},
-    input::InputState,
-    mesh::Vertex,
-    voxel::{AIR, World, build_world_mesh, raycast_world},
+    mesh::{MeshData, Vertex},
+    voxel::ChunkPos,
 };
+
+const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct CameraUniform {
+    view_projection: [[f32; 4]; 4],
+}
+
+struct GpuMesh {
+    vertex_buffer: wgpu::Buffer,
+    index_buffer: wgpu::Buffer,
+    index_count: u32,
+}
+
+impl GpuMesh {
+    fn new(device: &wgpu::Device, label: &str, mesh: &MeshData) -> Option<Self> {
+        if mesh.is_empty() {
+            return None;
+        }
+
+        let vertex_label = format!("{label} vertex buffer");
+        let index_label = format!("{label} index buffer");
+
+        Some(Self {
+            vertex_buffer: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some(&vertex_label),
+                contents: bytemuck::cast_slice(&mesh.vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            }),
+            index_buffer: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some(&index_label),
+                contents: bytemuck::cast_slice(&mesh.indices),
+                usage: wgpu::BufferUsages::INDEX,
+            }),
+            index_count: mesh.indices.len() as u32,
+        })
+    }
+}
+
+struct DepthTexture {
+    _texture: wgpu::Texture,
+    view: wgpu::TextureView,
+}
+
+impl DepthTexture {
+    fn new(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration) -> Self {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Depth texture"),
+            size: wgpu::Extent3d {
+                width: config.width.max(1),
+                height: config.height.max(1),
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: DEPTH_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        Self {
+            _texture: texture,
+            view,
+        }
+    }
+}
 
 pub struct Renderer {
     instance: wgpu::Instance,
     window: Arc<Window>,
-
     device: wgpu::Device,
     queue: wgpu::Queue,
-
     surface: wgpu::Surface<'static>,
     surface_config: wgpu::SurfaceConfiguration,
-
     render_pipeline: wgpu::RenderPipeline,
-
-    vertex_buffer: wgpu::Buffer,
-    index_buffer: wgpu::Buffer,
-    index_count: u32,
-
-    world: World,
-
-    camera: Camera,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
-
-    depth_texture: DepthTexture,
-
+    depth: DepthTexture,
+    chunk_meshes: HashMap<ChunkPos, GpuMesh>,
+    dynamic_mesh: Option<GpuMesh>,
     size: PhysicalSize<u32>,
 }
 
@@ -48,362 +107,221 @@ impl Renderer {
         display_handle: OwnedDisplayHandle,
         window: Arc<Window>,
     ) -> Result<Self, String> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle(
-            Box::new(display_handle),
-        ));
-
+        let instance = wgpu::Instance::new(
+            wgpu::InstanceDescriptor::new_with_display_handle(Box::new(display_handle)),
+        );
         let surface = instance
             .create_surface(Arc::clone(&window))
-            .map_err(|error| format!("Erro ao criar superfície: {error}"))?;
+            .map_err(|error| format!("Erro ao criar surface: {error}"))?;
 
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 compatible_surface: Some(&surface),
                 force_fallback_adapter: false,
-                apply_limit_buckets: false,
             })
             .await
             .map_err(|error| format!("Nenhuma GPU compatível: {error}"))?;
 
-        let adapter_info = adapter.get_info();
-
-        println!("GPU: {}", adapter_info.name);
-        println!("Backend: {:?}", adapter_info.backend);
+        let info = adapter.get_info();
+        log::info!("GPU: {} ({:?})", info.name, info.backend);
 
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("Nexus device"),
-
                 required_features: wgpu::Features::empty(),
-
                 required_limits: wgpu::Limits::default(),
-
                 experimental_features: wgpu::ExperimentalFeatures::disabled(),
-
                 memory_hints: wgpu::MemoryHints::Performance,
-
                 trace: wgpu::Trace::Off,
             })
             .await
-            .map_err(|error| format!("Erro ao criar dispositivo gráfico: {error}"))?;
+            .map_err(|error| format!("Erro ao criar device: {error}"))?;
 
         let mut size = window.inner_size();
-
         size.width = size.width.max(1);
         size.height = size.height.max(1);
 
         let surface_config = surface
             .get_default_config(&adapter, size.width, size.height)
-            .ok_or_else(|| String::from("Não foi possível configurar a superfície"))?;
-
+            .ok_or_else(|| "Não foi possível configurar a surface".to_string())?;
         surface.configure(&device, &surface_config);
 
-        // Câmera
-
-        let camera = Camera::new(surface_config.width, surface_config.height);
-
-        let mut camera_uniform = CameraUniform::new();
-        camera_uniform.update(&camera);
-
+        let camera_uniform = CameraUniform {
+            view_projection: Mat4::IDENTITY.to_cols_array_2d(),
+        };
         let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Camera uniform buffer"),
-
             contents: bytemuck::bytes_of(&camera_uniform),
-
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
-        let camera_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("Camera bind group layout"),
-
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-
-                    visibility: wgpu::ShaderStages::VERTEX,
-
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-
-                        has_dynamic_offset: false,
-
-                        min_binding_size: wgpu::BufferSize::new(
-                            mem::size_of::<CameraUniform>() as u64
-                        ),
-                    },
-
-                    count: None,
-                }],
-            });
-
+        let camera_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Camera bind group layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: wgpu::BufferSize::new(
+                        mem::size_of::<CameraUniform>() as u64,
+                    ),
+                },
+                count: None,
+            }],
+        });
         let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Camera bind group"),
-
-            layout: &camera_bind_group_layout,
-
+            layout: &camera_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
-
                 resource: camera_buffer.as_entire_binding(),
             }],
         });
 
-        // Shader e pipeline
-
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Main shader"),
-
+            label: Some("Nexus voxel shader"),
             source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!("shader.wgsl"))),
         });
-
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Main pipeline layout"),
-
-            bind_group_layouts: &[Some(&camera_bind_group_layout)],
-
+            label: Some("Nexus pipeline layout"),
+            bind_group_layouts: &[Some(&camera_layout)],
             immediate_size: 0,
         });
-
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Main render pipeline"),
-
+            label: Some("Nexus render pipeline"),
             layout: Some(&pipeline_layout),
-
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_main"),
-
-                buffers: &[Some(Vertex::layout())],
-
+                buffers: &[Vertex::layout()],
                 compilation_options: Default::default(),
             },
-
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-
                 entry_point: Some("fs_main"),
-
                 targets: &[Some(surface_config.format.into())],
-
                 compilation_options: Default::default(),
             }),
-
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
-
                 strip_index_format: None,
-
                 front_face: wgpu::FrontFace::Ccw,
-
-                // Desativado temporariamente.
-                // Depois corrigiremos o winding das faces.
                 cull_mode: None,
-
                 polygon_mode: wgpu::PolygonMode::Fill,
-
                 unclipped_depth: false,
                 conservative: false,
             },
-
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: DEPTH_FORMAT,
-
                 depth_write_enabled: Some(true),
-
                 depth_compare: Some(wgpu::CompareFunction::Less),
-
                 stencil: wgpu::StencilState::default(),
-
                 bias: wgpu::DepthBiasState::default(),
             }),
-
             multisample: wgpu::MultisampleState::default(),
-
             multiview_mask: None,
             cache: None,
         });
-
-        // mundo
-        let world = World::demo();
-
-        let world_mesh = build_world_mesh(&world);
-
-        println!(
-            "Mesh do mundo: {} vértices, {} índices, {} faces",
-            world_mesh.vertices.len(),
-            world_mesh.indices.len(),
-            world_mesh.face_count()
-        );
-
-        if world_mesh.is_empty() {
-            return Err("O mundo não gerou nenhuma geometria".to_string());
-        }
-
-        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("World vertex buffer"),
-
-            contents: bytemuck::cast_slice(&world_mesh.vertices),
-
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-
-        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("World index buffer"),
-
-            contents: bytemuck::cast_slice(&world_mesh.indices),
-
-            usage: wgpu::BufferUsages::INDEX,
-        });
-
-        let depth_texture = DepthTexture::new(&device, &surface_config);
-
-        let index_count = world_mesh.indices.len() as u32;
+        let depth = DepthTexture::new(&device, &surface_config);
 
         Ok(Self {
             instance,
             window,
-
             device,
             queue,
-
             surface,
             surface_config,
-
             render_pipeline,
-
-            vertex_buffer,
-            index_buffer,
-            index_count,
-
-            world,
-
-            camera,
             camera_buffer,
             camera_bind_group,
-
-            depth_texture,
-
+            depth,
+            chunk_meshes: HashMap::new(),
+            dynamic_mesh: None,
             size,
         })
     }
 
-    pub fn window_id(&self) -> WindowId {
-        self.window.id()
+    pub fn device(&self) -> &wgpu::Device {
+        &self.device
     }
 
-    pub fn request_redraw(&self) {
-        self.window.request_redraw();
+    pub fn surface_format(&self) -> wgpu::TextureFormat {
+        self.surface_config.format
     }
 
-    pub fn resize(&mut self, new_size: PhysicalSize<u32>) {
-        if new_size.width == 0 || new_size.height == 0 {
+    pub fn max_texture_dimension(&self) -> usize {
+        self.device.limits().max_texture_dimension_2d as usize
+    }
+
+    pub fn resize(&mut self, size: PhysicalSize<u32>) {
+        if size.width == 0 || size.height == 0 {
             return;
         }
-
-        self.size = new_size;
-
-        self.surface_config.width = new_size.width;
-
-        self.surface_config.height = new_size.height;
-
-        self.configure_surface();
-
-        self.camera.resize(new_size.width, new_size.height);
-
-        self.update_camera_buffer();
-
-        self.depth_texture = DepthTexture::new(&self.device, &self.surface_config);
-    }
-
-    fn configure_surface(&self) {
+        self.size = size;
+        self.surface_config.width = size.width;
+        self.surface_config.height = size.height;
         self.surface.configure(&self.device, &self.surface_config);
+        self.depth = DepthTexture::new(&self.device, &self.surface_config);
     }
 
-    fn update_camera_buffer(&self) {
-        let mut camera_uniform = CameraUniform::new();
+    pub fn upsert_chunk(&mut self, position: ChunkPos, mesh: &MeshData) {
+        match GpuMesh::new(&self.device, "Chunk", mesh) {
+            Some(mesh) => {
+                self.chunk_meshes.insert(position, mesh);
+            }
+            None => {
+                self.chunk_meshes.remove(&position);
+            }
+        }
+    }
 
-        camera_uniform.update(&self.camera);
+    pub fn remove_chunk(&mut self, position: ChunkPos) {
+        self.chunk_meshes.remove(&position);
+    }
 
+    pub fn upload_dynamic_mesh(&mut self, mesh: &MeshData) {
+        self.dynamic_mesh = GpuMesh::new(&self.device, "Dynamic entities", mesh);
+    }
+
+    pub fn render<F>(&mut self, view_projection: Mat4, overlay: F)
+    where
+        F: FnOnce(
+            &wgpu::Device,
+            &wgpu::Queue,
+            &mut wgpu::CommandEncoder,
+            &wgpu::TextureView,
+            [u32; 2],
+        ) -> Vec<wgpu::CommandBuffer>,
+    {
+        let uniform = CameraUniform {
+            view_projection: view_projection.to_cols_array_2d(),
+        };
         self.queue
-            .write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&camera_uniform));
-    }
-
-    fn rebuild_world_mesh(&mut self) {
-        let world_mesh = build_world_mesh(&self.world);
-
-        println!(
-            "Mesh do mundo: {} vértices, {} índices, {} faces",
-            world_mesh.vertices.len(),
-            world_mesh.indices.len(),
-            world_mesh.face_count()
-        );
-
-        if world_mesh.indices.is_empty() {
-            self.index_count = 0;
-            return;
-        }
-
-        self.vertex_buffer = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("World vertex buffer"),
-                contents: bytemuck::cast_slice(&world_mesh.vertices),
-                usage: wgpu::BufferUsages::VERTEX,
-            });
-
-        self.index_buffer = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("World index buffer"),
-                contents: bytemuck::cast_slice(&world_mesh.indices),
-                usage: wgpu::BufferUsages::INDEX,
-            });
-
-        self.index_count = world_mesh.indices.len() as u32;
-    }
-
-    pub fn render(&mut self) {
-        if self.size.width == 0 || self.size.height == 0 {
-            return;
-        }
+            .write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&uniform));
 
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame) => frame,
-
-            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
-                return;
-            }
-
             wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
-                drop(frame);
-                self.configure_surface();
-                return;
+                self.surface.configure(&self.device, &self.surface_config);
+                frame
             }
-
+            wgpu::CurrentSurfaceTexture::Timeout
+            | wgpu::CurrentSurfaceTexture::Occluded => return,
             wgpu::CurrentSurfaceTexture::Outdated => {
-                self.configure_surface();
+                self.surface.configure(&self.device, &self.surface_config);
                 return;
             }
-
             wgpu::CurrentSurfaceTexture::Lost => {
-                match self.instance.create_surface(Arc::clone(&self.window)) {
-                    Ok(surface) => {
-                        self.surface = surface;
-                        self.configure_surface();
-                    }
-
-                    Err(error) => {
-                        eprintln!("Erro ao recriar superfície: {error}");
-                    }
+                if let Ok(surface) = self.instance.create_surface(Arc::clone(&self.window)) {
+                    self.surface = surface;
+                    self.surface.configure(&self.device, &self.surface_config);
                 }
-
                 return;
             }
-
             wgpu::CurrentSurfaceTexture::Validation => {
-                eprintln!("Erro de validação ao obter frame");
-
+                log::error!("Erro de validação ao adquirir frame");
                 return;
             }
         };
@@ -411,133 +329,70 @@ impl Renderer {
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Main command encoder"),
+                label: Some("Nexus frame encoder"),
             });
 
         {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Main render pass"),
-
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Nexus world pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
                     depth_slice: None,
                     resolve_target: None,
-
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.08,
-                            g: 0.13,
-                            b: 0.20,
+                            r: 0.42,
+                            g: 0.65,
+                            b: 0.90,
                             a: 1.0,
                         }),
-
                         store: wgpu::StoreOp::Store,
                     },
                 })],
-
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.depth_texture.view,
-
+                    view: &self.depth.view,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(1.0),
-
                         store: wgpu::StoreOp::Store,
                     }),
-
                     stencil_ops: None,
                 }),
-
                 timestamp_writes: None,
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
 
-            render_pass.set_pipeline(&self.render_pipeline);
+            pass.set_pipeline(&self.render_pipeline);
+            pass.set_bind_group(0, &self.camera_bind_group, &[]);
 
-            render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
-
-            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-
-            render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-
-            render_pass.draw_indexed(0..self.index_count, 0, 0..1);
+            for mesh in self.chunk_meshes.values() {
+                draw_mesh(&mut pass, mesh);
+            }
+            if let Some(mesh) = &self.dynamic_mesh {
+                draw_mesh(&mut pass, mesh);
+            }
         }
 
-        self.queue.submit([encoder.finish()]);
+        let mut command_buffers = overlay(
+            &self.device,
+            &self.queue,
+            &mut encoder,
+            &view,
+            [self.size.width, self.size.height],
+        );
+        command_buffers.push(encoder.finish());
+        self.queue.submit(command_buffers);
 
         self.window.pre_present_notify();
-        self.queue.present(frame);
+        frame.present();
     }
+}
 
-    pub fn set_cursor_captured(&self, captured: bool) -> bool {
-        if !captured {
-            let result = self.window.set_cursor_grab(CursorGrabMode::None);
-
-            self.window.set_cursor_visible(true);
-
-            if let Err(error) = result {
-                eprintln!("Erro ao liberar o cursor: {error}");
-            }
-
-            return true;
-        }
-
-        let result = self
-            .window
-            .set_cursor_grab(CursorGrabMode::Locked)
-            .or_else(|_| self.window.set_cursor_grab(CursorGrabMode::Confined));
-
-        match result {
-            Ok(()) => {
-                self.window.set_cursor_visible(false);
-                true
-            }
-
-            Err(error) => {
-                eprintln!("Não foi possível capturar o cursor: {error}");
-
-                self.window.set_cursor_visible(true);
-
-                false
-            }
-        }
-    }
-
-    pub fn update(&mut self, input: &mut InputState, delta_time: f32) {
-        self.camera.update(input, delta_time);
-        self.update_camera_buffer();
-    }
-
-    pub fn break_targeted_block(&mut self) -> bool {
-        const MAX_REACH: f32 = 8.0;
-
-        let hit = raycast_world(
-            &self.world,
-            self.camera.position(),
-            self.camera.forward(),
-            MAX_REACH,
-        );
-
-        let Some(hit) = hit else {
-            return false;
-        };
-
-        println!("Quebrando bloco em {:?}", hit);
-
-        let removed = self
-            .world
-            .set(hit.position.x, hit.position.y, hit.position.z, AIR);
-
-        if !removed {
-            return false;
-        }
-
-        self.rebuild_world_mesh();
-
-        true
-    }
+fn draw_mesh<'a>(pass: &mut wgpu::RenderPass<'a>, mesh: &'a GpuMesh) {
+    pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
+    pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+    pass.draw_indexed(0..mesh.index_count, 0, 0..1);
 }

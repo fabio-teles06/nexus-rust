@@ -2,11 +2,18 @@
 name = "nexus"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.95"
 
 [dependencies]
-bytemuck = { version = "1.25.2", features = ["derive"] }
-env_logger = "0.11.11"
-glam = "0.33.2"
-pollster = "1.0.1"
-wgpu = "30.0.0"
+bevy_ecs = "0.19"
+bytemuck = { version = "1.25", features = ["derive"] }
+egui = "0.35"
+egui-wgpu = "0.35"
+egui-winit = "0.35"
+env_logger = "0.11"
+glam = { version = "0.33", features = ["bytemuck"] }
+log = "0.4"
+pollster = "0.4"
+rapier3d = "0.34"
+wgpu = "29.0.3"
 winit = "0.30.13"

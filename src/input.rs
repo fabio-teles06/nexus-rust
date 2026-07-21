@@ -7,12 +7,9 @@ pub struct InputState {
     pub backward: bool,
     pub left: bool,
     pub right: bool,
-
     pub up: bool,
     pub down: bool,
-
     pub sprint: bool,
-
     mouse_delta: Vec2,
 }
 
@@ -21,37 +18,14 @@ impl InputState {
         let pressed = state == ElementState::Pressed;
 
         match key {
-            KeyCode::KeyW => {
-                self.forward = pressed;
-            }
-
-            KeyCode::KeyS => {
-                self.backward = pressed;
-            }
-
-            KeyCode::KeyA => {
-                self.left = pressed;
-            }
-
-            KeyCode::KeyD => {
-                self.right = pressed;
-            }
-
-            KeyCode::Space => {
-                self.up = pressed;
-            }
-
-            KeyCode::ControlLeft => {
-                self.down = pressed;
-            }
-
-            KeyCode::ShiftLeft => {
-                self.sprint = pressed;
-            }
-
-            _ => {
-                return false;
-            }
+            KeyCode::KeyW => self.forward = pressed,
+            KeyCode::KeyS => self.backward = pressed,
+            KeyCode::KeyA => self.left = pressed,
+            KeyCode::KeyD => self.right = pressed,
+            KeyCode::Space => self.up = pressed,
+            KeyCode::ControlLeft => self.down = pressed,
+            KeyCode::ShiftLeft => self.sprint = pressed,
+            _ => return false,
         }
 
         true
@@ -62,22 +36,10 @@ impl InputState {
     }
 
     pub fn take_mouse_delta(&mut self) -> Vec2 {
-        let delta = self.mouse_delta;
-        self.mouse_delta = Vec2::ZERO;
-        delta
+        std::mem::take(&mut self.mouse_delta)
     }
 
     pub fn clear(&mut self) {
-        self.forward = false;
-        self.backward = false;
-        self.left = false;
-        self.right = false;
-
-        self.up = false;
-        self.down = false;
-
-        self.sprint = false;
-
-        self.mouse_delta = Vec2::ZERO;
+        *self = Self::default();
     }
 }

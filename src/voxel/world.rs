@@ -1,95 +1,153 @@
-use super::block::{AIR, BlockId, DIRT, GRASS, STONE};
+use std::collections::{HashMap, HashSet};
 
-#[derive(Debug)]
-pub struct World {
-    width: i32,
-    height: i32,
-    depth: i32,
-    blocks: Vec<BlockId>,
+use glam::{IVec3, Vec3};
+
+use super::{
+    block::{AIR, BlockId},
+    chunk::{Chunk, ChunkPos, world_to_local},
+    generator::generate_chunk,
+};
+
+#[derive(Debug, Default)]
+pub struct StreamDelta {
+    pub loaded: Vec<ChunkPos>,
+    pub unloaded: Vec<ChunkPos>,
 }
 
-impl World {
-    pub fn new(width: i32, height: i32, depth: i32) -> Self {
-        assert!(width > 0);
-        assert!(height > 0);
-        assert!(depth > 0);
+pub struct VoxelWorld {
+    chunks: HashMap<ChunkPos, Chunk>,
+    dirty: HashSet<ChunkPos>,
+    stream_center: Option<ChunkPos>,
+    seed: u32,
+}
 
-        let block_count = width as usize * height as usize * depth as usize;
-
+impl VoxelWorld {
+    pub fn new(seed: u32) -> Self {
         Self {
-            width,
-            height,
-            depth,
-            blocks: vec![AIR; block_count],
+            chunks: HashMap::new(),
+            dirty: HashSet::new(),
+            stream_center: None,
+            seed,
         }
     }
 
-    pub fn demo() -> Self {
-        let mut world = Self::new(32, 16, 32);
+    pub fn stream_around(
+        &mut self,
+        world_position: Vec3,
+        horizontal_radius: i32,
+        vertical_radius: i32,
+        force: bool,
+    ) -> StreamDelta {
+        let center = ChunkPos::from_world_position(world_position);
+        if !force && self.stream_center == Some(center) {
+            return StreamDelta::default();
+        }
 
-        for z in 0..world.depth {
-            for x in 0..world.width {
-                let variation = ((x * 13 + z * 7) % 3).abs();
+        self.stream_center = Some(center);
+        let mut desired = HashSet::new();
 
-                let surface_y = 3 + variation;
-
-                for y in 0..=surface_y {
-                    let block_id = if y == surface_y {
-                        GRASS
-                    } else if y >= surface_y - 2 {
-                        DIRT
-                    } else {
-                        STONE
-                    };
-
-                    world.set(x, y, z, block_id);
+        for y in -vertical_radius..=vertical_radius {
+            for z in -horizontal_radius..=horizontal_radius {
+                for x in -horizontal_radius..=horizontal_radius {
+                    desired.insert(ChunkPos::new(center.x + x, center.y + y, center.z + z));
                 }
             }
         }
 
-        world
+        let existing: Vec<_> = self.chunks.keys().copied().collect();
+        let mut delta = StreamDelta::default();
+
+        for position in existing {
+            if !desired.contains(&position) {
+                self.chunks.remove(&position);
+                self.dirty.remove(&position);
+                delta.unloaded.push(position);
+                self.mark_loaded_neighbors_dirty(position);
+            }
+        }
+
+        for position in desired {
+            if self.chunks.contains_key(&position) {
+                continue;
+            }
+
+            let chunk = generate_chunk(position, self.seed);
+            self.chunks.insert(position, chunk);
+            delta.loaded.push(position);
+            self.mark_dirty_with_neighbors(position);
+        }
+
+        delta
     }
 
-    pub fn size(&self) -> [i32; 3] {
-        [self.width, self.height, self.depth]
+    pub fn clear(&mut self) -> Vec<ChunkPos> {
+        let removed = self.chunks.keys().copied().collect();
+        self.chunks.clear();
+        self.dirty.clear();
+        self.stream_center = None;
+        removed
     }
 
-    pub fn contains(&self, x: i32, y: i32, z: i32) -> bool {
-        x >= 0 && x < self.width && y >= 0 && y < self.height && z >= 0 && z < self.depth
-    }
-
-    pub fn get(&self, x: i32, y: i32, z: i32) -> BlockId {
-        let Some(index) = self.index(x, y, z) else {
+    pub fn get_block(&self, world: IVec3) -> BlockId {
+        let chunk_position = ChunkPos::from_world_block(world);
+        let Some(chunk) = self.chunks.get(&chunk_position) else {
             return AIR;
         };
-
-        self.blocks[index]
+        chunk.get(world_to_local(world))
     }
 
-    pub fn set(&mut self, x: i32, y: i32, z: i32, block: BlockId) -> bool {
-        let Some(index) = self.index(x, y, z) else {
+    #[allow(dead_code)]
+    pub fn set_block(&mut self, world: IVec3, block: BlockId) -> bool {
+        let chunk_position = ChunkPos::from_world_block(world);
+        let Some(chunk) = self.chunks.get_mut(&chunk_position) else {
             return false;
         };
 
-        if self.blocks[index] == block {
+        if !chunk.set(world_to_local(world), block) {
             return false;
         }
 
-        self.blocks[index] = block;
+        self.mark_dirty_with_neighbors(chunk_position);
         true
     }
 
-    fn index(&self, x: i32, y: i32, z: i32) -> Option<usize> {
-        if !self.contains(x, y, z) {
-            return None;
-        }
-
-        let index = (y * self.width * self.depth + z * self.width + x) as usize;
-        Some(index)
+    pub fn chunk(&self, position: ChunkPos) -> Option<&Chunk> {
+        self.chunks.get(&position)
     }
 
-    pub fn render_origin(&self) -> [f32; 3] {
-        [-(self.width as f32) * 0.5, 0.0, -(self.depth as f32) * 0.5]
+    pub fn contains_chunk(&self, position: ChunkPos) -> bool {
+        self.chunks.contains_key(&position)
+    }
+
+    pub fn chunk_count(&self) -> usize {
+        self.chunks.len()
+    }
+
+    pub fn solid_block_count(&self) -> usize {
+        self.chunks.values().map(Chunk::solid_count).sum()
+    }
+
+    pub fn current_center(&self) -> Option<ChunkPos> {
+        self.stream_center
+    }
+
+    pub fn take_dirty(&mut self) -> Vec<ChunkPos> {
+        self.dirty.drain().collect()
+    }
+
+    fn mark_dirty_with_neighbors(&mut self, position: ChunkPos) {
+        if self.chunks.contains_key(&position) {
+            self.dirty.insert(position);
+        }
+        self.mark_loaded_neighbors_dirty(position);
+    }
+
+    fn mark_loaded_neighbors_dirty(&mut self, position: ChunkPos) {
+        for neighbor in position.neighbors() {
+            if self.chunks.contains_key(&neighbor) {
+                self.dirty.insert(neighbor);
+            }
+        }
     }
 }
 
@@ -98,37 +156,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn create_empty_world() {
-        let world = World::new(4, 4, 4);
+    fn streams_chunks_on_the_vertical_axis() {
+        let mut world = VoxelWorld::new(123);
+        let delta = world.stream_around(Vec3::new(0.0, 24.0, 0.0), 0, 2, true);
 
-        assert_eq!(world.get(0, 0, 0), AIR);
-        assert_eq!(world.get(3, 3, 3), AIR);
+        assert_eq!(delta.loaded.len(), 5);
+        assert!(delta.loaded.iter().any(|position| position.y == -1));
+        assert!(delta.loaded.iter().any(|position| position.y == 3));
     }
 
     #[test]
-    fn can_change_block() {
-        let mut world = World::new(4, 4, 4);
+    fn moving_vertically_changes_the_stream_center() {
+        let mut world = VoxelWorld::new(123);
+        world.stream_around(Vec3::new(0.0, 1.0, 0.0), 0, 0, true);
+        let lower = world.current_center();
 
-        assert!(world.set(2, 1, 3, STONE));
-        assert_eq!(world.get(2, 1, 3), STONE);
-    }
+        world.stream_around(Vec3::new(0.0, 33.0, 0.0), 0, 0, false);
+        let upper = world.current_center();
 
-    #[test]
-    fn rejects_out_of_bounds() {
-        let mut world = World::new(4, 4, 4);
-
-        assert!(!world.set(-1, 0, 0, STONE));
-        assert!(!world.set(0, -1, 0, STONE));
-        assert!(!world.set(0, 0, -1, STONE));
-        assert!(!world.set(4, 0, 0, STONE));
-        assert!(!world.set(0, 4, 0, STONE));
-        assert!(!world.set(0, 0, 4, STONE));
-
-        assert_eq!(world.get(-1, 0, 0), AIR);
-        assert_eq!(world.get(0, -1, 0), AIR);
-        assert_eq!(world.get(0, 0, -1), AIR);
-        assert_eq!(world.get(4, 0, 0), AIR);
-        assert_eq!(world.get(0, 4, 0), AIR);
-        assert_eq!(world.get(0, 0, 4), AIR);
+        assert_ne!(lower, upper);
+        assert_eq!(upper, Some(ChunkPos::new(0, 2, 0)));
     }
 }
