@@ -129,17 +129,30 @@ impl DebugGui {
                         snapshot.camera_position.z,
                     ));
                     ui.label(format!("Chunk central: {:?}", snapshot.center_chunk));
-                    ui.label(format!("Chunks carregados: {}", snapshot.loaded_chunks));
+                    ui.label(format!("Chunks na memória: {}", snapshot.loaded_chunks));
+                    ui.label(format!(
+                        "Chunks no raio visual: {}",
+                        snapshot.render_radius_chunks
+                    ));
+                    ui.label(format!(
+                        "Chunks protegidos pela física: {}",
+                        snapshot.physics_keepalive_chunks
+                    ));
+                    ui.label(format!(
+                        "Frustum: {} visíveis / {} descartados",
+                        snapshot.frustum_visible_chunks,
+                        snapshot.frustum_culled_chunks
+                    ));
                     ui.label(format!("Blocos sólidos: {}", snapshot.solid_blocks));
-                    ui.label(format!("Triângulos voxel: {}", snapshot.rendered_triangles));
+                    ui.label(format!("Triângulos carregados: {}", snapshot.rendered_triangles));
 
                     ui.horizontal(|ui| {
                         ui.label("Raio horizontal");
-                        ui.add(egui::Slider::new(&mut horizontal_radius, 0..=5));
+                        ui.add(egui::Slider::new(&mut horizontal_radius, 0..=12));
                     });
                     ui.horizontal(|ui| {
                         ui.label("Raio vertical");
-                        ui.add(egui::Slider::new(&mut vertical_radius, 0..=4));
+                        ui.add(egui::Slider::new(&mut vertical_radius, 0..=8));
                     });
                     if ui.button("Regenerar streaming").clicked() {
                         regenerate_chunks = true;

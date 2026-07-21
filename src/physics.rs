@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use glam::Vec3;
 use rapier3d::prelude::*;
@@ -91,7 +91,13 @@ impl PhysicsWorld {
         let vertices = mesh
             .vertices
             .iter()
-            .map(|vertex| Vector::new(vertex.position[0], vertex.position[1], vertex.position[2]))
+            .map(|vertex| {
+                Vector::new(
+                    vertex.position[0],
+                    vertex.position[1],
+                    vertex.position[2],
+                )
+            })
             .collect::<Vec<_>>();
 
         let triangles = mesh
@@ -124,6 +130,53 @@ impl PhysicsWorld {
         for position in positions {
             self.remove_chunk_collider(position);
         }
+    }
+
+
+    /// Retorna os chunks que precisam permanecer carregados para sustentar
+    /// corpos dinâmicos, mesmo quando eles estiverem fora do raio visual.
+    ///
+    /// `below` deve ser maior que zero para manter terreno suficiente abaixo de
+    /// objetos em queda. Como o carregamento é concluído antes do próximo passo
+    /// da física, o volume protegido acompanha os corpos sem criar buracos.
+    pub fn required_chunk_keepalive(
+        &self,
+        horizontal_radius: i32,
+        below: i32,
+        above: i32,
+    ) -> HashSet<ChunkPos> {
+        let horizontal_radius = horizontal_radius.max(0);
+        let below = below.max(0);
+        let above = above.max(0);
+        let radius_squared = horizontal_radius * horizontal_radius;
+        let mut chunks = HashSet::new();
+
+        for (_, body) in self.bodies.iter() {
+            let translation = body.translation();
+            let center = ChunkPos::from_world_position(Vec3::new(
+                translation.x,
+                translation.y,
+                translation.z,
+            ));
+
+            for y in -below..=above {
+                for z in -horizontal_radius..=horizontal_radius {
+                    for x in -horizontal_radius..=horizontal_radius {
+                        if x * x + z * z > radius_squared {
+                            continue;
+                        }
+
+                        chunks.insert(ChunkPos::new(
+                            center.x + x,
+                            center.y + y,
+                            center.z + z,
+                        ));
+                    }
+                }
+            }
+        }
+
+        chunks
     }
 
     pub fn bodies(&self) -> &RigidBodySet {

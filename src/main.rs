@@ -3,6 +3,7 @@ mod camera;
 mod debug_gui;
 mod ecs_scene;
 mod game;
+mod frustum;
 mod input;
 mod mesh;
 mod physics;

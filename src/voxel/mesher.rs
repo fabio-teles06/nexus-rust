@@ -116,7 +116,13 @@ mod tests {
     #[test]
     fn generated_chunk_can_be_meshed() {
         let mut world = VoxelWorld::new(7);
-        world.stream_around(Vec3::new(0.0, 24.0, 0.0), 0, 0, true);
+        world.stream_around(
+            Vec3::new(0.0, 24.0, 0.0),
+            0,
+            0,
+            &std::collections::HashSet::new(),
+            true,
+        );
         let position = world.current_center().unwrap();
         let mesh = build_chunk_mesh(&world, position);
         assert!(mesh.indices.len() % 3 == 0);

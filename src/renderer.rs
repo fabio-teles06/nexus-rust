@@ -14,6 +14,7 @@ use winit::{
 };
 
 use crate::{
+    frustum::Frustum,
     mesh::{MeshData, Vertex},
     voxel::ChunkPos,
 };
@@ -24,6 +25,12 @@ const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct CameraUniform {
     view_projection: [[f32; 4]; 4],
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct RenderStats {
+    pub visible_chunks: usize,
+    pub culled_chunks: usize,
 }
 
 struct GpuMesh {
@@ -99,6 +106,7 @@ pub struct Renderer {
     depth: DepthTexture,
     chunk_meshes: HashMap<ChunkPos, GpuMesh>,
     dynamic_mesh: Option<GpuMesh>,
+    last_render_stats: RenderStats,
     size: PhysicalSize<u32>,
 }
 
@@ -239,6 +247,7 @@ impl Renderer {
             depth,
             chunk_meshes: HashMap::new(),
             dynamic_mesh: None,
+            last_render_stats: RenderStats::default(),
             size,
         })
     }
@@ -285,6 +294,10 @@ impl Renderer {
         self.dynamic_mesh = GpuMesh::new(&self.device, "Dynamic entities", mesh);
     }
 
+    pub fn render_stats(&self) -> RenderStats {
+        self.last_render_stats
+    }
+
     pub fn render<F>(&mut self, view_projection: Mat4, overlay: F)
     where
         F: FnOnce(
@@ -300,6 +313,9 @@ impl Renderer {
         };
         self.queue
             .write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&uniform));
+
+        let frustum = Frustum::from_view_projection(view_projection);
+        let mut render_stats = RenderStats::default();
 
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame) => frame,
@@ -368,13 +384,20 @@ impl Renderer {
             pass.set_pipeline(&self.render_pipeline);
             pass.set_bind_group(0, &self.camera_bind_group, &[]);
 
-            for mesh in self.chunk_meshes.values() {
-                draw_mesh(&mut pass, mesh);
+            for (position, mesh) in &self.chunk_meshes {
+                if frustum.intersects_chunk(*position) {
+                    draw_mesh(&mut pass, mesh);
+                    render_stats.visible_chunks += 1;
+                } else {
+                    render_stats.culled_chunks += 1;
+                }
             }
             if let Some(mesh) = &self.dynamic_mesh {
                 draw_mesh(&mut pass, mesh);
             }
         }
+
+        self.last_render_stats = render_stats;
 
         let mut command_buffers = overlay(
             &self.device,

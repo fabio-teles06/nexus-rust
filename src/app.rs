@@ -234,7 +234,12 @@ impl App {
 
         sync_chunks(renderer, game);
 
-        let snapshot = game.debug_snapshot(delta_time);
+        let render_stats = renderer.render_stats();
+        let snapshot = game.debug_snapshot(
+            delta_time,
+            render_stats.visible_chunks,
+            render_stats.culled_chunks,
+        );
         let (gui_frame, actions) = gui.begin_frame(window, &snapshot);
 
         game.set_physics_paused(actions.physics_paused);
