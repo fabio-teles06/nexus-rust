@@ -125,7 +125,11 @@ impl ApplicationHandler for App {
 
                     self.input.clear();
                     self.last_frame = Instant::now();
+
+                    return;
                 }
+
+                renderer.break_targeted_block();
             }
 
             WindowEvent::Focused(false) => {
@@ -162,8 +166,7 @@ impl ApplicationHandler for App {
         _event_loop: &ActiveEventLoop,
         _device_id: DeviceId,
         event: DeviceEvent,
-    )
-    {
+    ) {
         if !self.mouse_captured {
             return;
         }

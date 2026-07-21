@@ -1,18 +1,12 @@
 pub mod block;
 pub mod mesh;
+pub mod raycast;
 pub mod world;
 
-pub use block::{
-    BlockId,
-    AIR,
-    DIRT,
-    GRASS,
-    STONE,
-};
+pub use block::{AIR, BlockId, DIRT, GRASS, STONE};
 
-pub use mesh::{
-    build_world_mesh,
-    VoxelMesh,
-};
+pub use mesh::{VoxelMesh, build_world_mesh};
+
+pub use raycast::{RaycastHit, raycast_world};
 
 pub use world::World;

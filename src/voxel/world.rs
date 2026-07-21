@@ -87,6 +87,10 @@ impl World {
         let index = (y * self.width * self.depth + z * self.width + x) as usize;
         Some(index)
     }
+
+    pub fn render_origin(&self) -> [f32; 3] {
+        [-(self.width as f32) * 0.5, 0.0, -(self.depth as f32) * 0.5]
+    }
 }
 
 #[cfg(test)]

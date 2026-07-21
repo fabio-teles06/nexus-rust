@@ -13,7 +13,7 @@ use crate::{
     depth::{DEPTH_FORMAT, DepthTexture},
     input::InputState,
     mesh::Vertex,
-    voxel::{World, build_world_mesh},
+    voxel::{AIR, World, build_world_mesh, raycast_world},
 };
 
 pub struct Renderer {
@@ -31,6 +31,8 @@ pub struct Renderer {
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     index_count: u32,
+
+    world: World,
 
     camera: Camera,
     camera_buffer: wgpu::Buffer,
@@ -274,6 +276,8 @@ impl Renderer {
             index_buffer,
             index_count,
 
+            world,
+
             camera,
             camera_buffer,
             camera_bind_group,
@@ -323,6 +327,40 @@ impl Renderer {
 
         self.queue
             .write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&camera_uniform));
+    }
+
+    fn rebuild_world_mesh(&mut self) {
+        let world_mesh = build_world_mesh(&self.world);
+
+        println!(
+            "Mesh do mundo: {} vértices, {} índices, {} faces",
+            world_mesh.vertices.len(),
+            world_mesh.indices.len(),
+            world_mesh.face_count()
+        );
+
+        if world_mesh.indices.is_empty() {
+            self.index_count = 0;
+            return;
+        }
+
+        self.vertex_buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("World vertex buffer"),
+                contents: bytemuck::cast_slice(&world_mesh.vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+
+        self.index_buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("World index buffer"),
+                contents: bytemuck::cast_slice(&world_mesh.indices),
+                usage: wgpu::BufferUsages::INDEX,
+            });
+
+        self.index_count = world_mesh.indices.len() as u32;
     }
 
     pub fn render(&mut self) {
@@ -472,5 +510,34 @@ impl Renderer {
     pub fn update(&mut self, input: &mut InputState, delta_time: f32) {
         self.camera.update(input, delta_time);
         self.update_camera_buffer();
+    }
+
+    pub fn break_targeted_block(&mut self) -> bool {
+        const MAX_REACH: f32 = 8.0;
+
+        let hit = raycast_world(
+            &self.world,
+            self.camera.position(),
+            self.camera.forward(),
+            MAX_REACH,
+        );
+
+        let Some(hit) = hit else {
+            return false;
+        };
+
+        println!("Quebrando bloco em {:?}", hit);
+
+        let removed = self
+            .world
+            .set(hit.position.x, hit.position.y, hit.position.z, AIR);
+
+        if !removed {
+            return false;
+        }
+
+        self.rebuild_world_mesh();
+
+        true
     }
 }

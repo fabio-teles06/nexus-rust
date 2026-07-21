@@ -46,7 +46,6 @@ const FACES: [Face; 6] = [
         ],
         shade: 0.90,
     },
-
     // Trás: -Z
     Face {
         neighbor: [0, 0, -1],
@@ -58,7 +57,6 @@ const FACES: [Face; 6] = [
         ],
         shade: 0.72,
     },
-
     // Direita: +X
     Face {
         neighbor: [1, 0, 0],
@@ -70,7 +68,6 @@ const FACES: [Face; 6] = [
         ],
         shade: 0.82,
     },
-
     // Esquerda: -X
     Face {
         neighbor: [-1, 0, 0],
@@ -82,7 +79,6 @@ const FACES: [Face; 6] = [
         ],
         shade: 0.76,
     },
-
     // Cima: +Y
     Face {
         neighbor: [0, 1, 0],
@@ -94,7 +90,6 @@ const FACES: [Face; 6] = [
         ],
         shade: 1.0,
     },
-
     // Baixo: -Y
     Face {
         neighbor: [0, -1, 0],
@@ -113,16 +108,7 @@ pub fn build_world_mesh(world: &World) -> VoxelMesh {
 
     let [width, height, depth] = world.size();
 
-    /*
-     * Centraliza o mundo nos eixos X e Z.
-     *
-     * Um mundo com 32 blocos ficará aproximadamente entre:
-     *
-     * X: -16 até +16
-     * Z: -16 até +16
-     */
-    let world_origin_x = -(width as f32) * 0.5;
-    let world_origin_z = -(depth as f32) * 0.5;
+    let [world_origin_x, _, world_origin_z] = world.render_origin();
 
     for y in 0..height {
         for z in 0..depth {
@@ -136,20 +122,13 @@ pub fn build_world_mesh(world: &World) -> VoxelMesh {
                 let base_color = block.color();
 
                 for face in FACES {
-                    let neighbor_x =
-                        x + face.neighbor[0];
+                    let neighbor_x = x + face.neighbor[0];
 
-                    let neighbor_y =
-                        y + face.neighbor[1];
+                    let neighbor_y = y + face.neighbor[1];
 
-                    let neighbor_z =
-                        z + face.neighbor[2];
+                    let neighbor_z = z + face.neighbor[2];
 
-                    let neighbor = world.get(
-                        neighbor_x,
-                        neighbor_y,
-                        neighbor_z,
-                    );
+                    let neighbor = world.get(neighbor_x, neighbor_y, neighbor_z);
 
                     /*
                      * Se o bloco vizinho for sólido,
@@ -167,10 +146,7 @@ pub fn build_world_mesh(world: &World) -> VoxelMesh {
                             world_origin_z + z as f32,
                         ],
                         face,
-                        shade_color(
-                            base_color,
-                            face.shade,
-                        ),
+                        shade_color(base_color, face.shade),
                     );
                 }
             }
@@ -180,14 +156,8 @@ pub fn build_world_mesh(world: &World) -> VoxelMesh {
     mesh
 }
 
-fn add_face(
-    mesh: &mut VoxelMesh,
-    block_position: [f32; 3],
-    face: Face,
-    color: [f32; 3],
-) {
-    let first_vertex =
-        mesh.vertices.len() as u32;
+fn add_face(mesh: &mut VoxelMesh, block_position: [f32; 3], face: Face, color: [f32; 3]) {
+    let first_vertex = mesh.vertices.len() as u32;
 
     for corner in face.corners {
         mesh.vertices.push(Vertex {
@@ -212,31 +182,20 @@ fn add_face(
         first_vertex,
         first_vertex + 1,
         first_vertex + 2,
-
         first_vertex,
         first_vertex + 2,
         first_vertex + 3,
     ]);
 }
 
-fn shade_color(
-    color: [f32; 3],
-    shade: f32,
-) -> [f32; 3] {
-    [
-        color[0] * shade,
-        color[1] * shade,
-        color[2] * shade,
-    ]
+fn shade_color(color: [f32; 3], shade: f32) -> [f32; 3] {
+    [color[0] * shade, color[1] * shade, color[2] * shade]
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::voxel::{
-        block::STONE,
-        world::World,
-    };
+    use crate::voxel::{block::STONE, world::World};
 
     #[test]
     fn one_block_has_six_faces() {

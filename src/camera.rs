@@ -48,6 +48,14 @@ impl Camera {
         self.update_rotation(input);
     }
 
+    pub fn position(&self) -> Vec3 {
+        self.position
+    }
+
+    pub fn forward(&self) -> Vec3 {
+        self.forward_direction()
+    }
+
     fn update_rotation(&mut self, input: &mut InputState) {
         let mouse_delta = input.take_mouse_delta();
 
