@@ -21,6 +21,10 @@ glam = {
     version = "0.33",
     features = ["serde", "bytemuck"]
 }
+serde = {
+    version = "1",
+    features = ["derive"]
+}
 
 engine-core = { path = "crates/engine-core" }
 engine-ecs = { path = "crates/engine-ecs" }

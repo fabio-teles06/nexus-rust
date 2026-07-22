@@ -345,6 +345,9 @@ dependencies = [
 [[package]]
 name = "engine-core"
 version = "0.1.0"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "engine-ecs"
@@ -654,6 +657,7 @@ dependencies = [
  "bevy_ecs",
  "engine-client",
  "engine-ecs",
+ "engine-network",
  "sandbox-server",
  "sandbox-shared",
 ]
