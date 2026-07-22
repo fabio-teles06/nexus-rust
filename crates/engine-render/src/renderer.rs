@@ -157,7 +157,6 @@ impl Renderer {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 compatible_surface: Some(&surface),
                 force_fallback_adapter: false,
-                apply_limit_buckets: false,
             })
             .await?;
 
@@ -241,10 +240,9 @@ impl Renderer {
         });
 
         let vertex_layout = Vertex::layout();
-
         let instance_layout = InstanceRaw::layout();
 
-        let vertex_buffers = [Some(vertex_layout), Some(instance_layout)];
+        let vertex_buffers = [vertex_layout, instance_layout];
 
         let color_targets = [Some(wgpu::ColorTargetState {
             format: config.format,
@@ -473,7 +471,8 @@ impl Renderer {
         /*
          * wgpu 30 apresenta o frame pela Queue.
          */
-        self.queue.present(surface_texture);
+        // self.queue.present(surface_texture);
+        surface_texture.present();
 
         if should_reconfigure {
             self.reconfigure_surface();

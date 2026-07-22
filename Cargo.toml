@@ -21,7 +21,7 @@ license = "MIT"
 [workspace.dependencies]
 bevy_ecs = "0.19"
 winit="0.30"
-wgpu="30"
+wgpu="29"
 pollster="0.4"
 thiserror="2"
 
