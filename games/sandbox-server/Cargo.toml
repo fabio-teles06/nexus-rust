@@ -7,6 +7,9 @@ license.workspace = true
 
 [dependencies]
 engine-core.workspace = true
+engine-ecs.workspace = true
 engine-network.workspace = true
 engine-server.workspace = true
 sandbox-shared.workspace = true
+
+bevy_ecs.workspace = true

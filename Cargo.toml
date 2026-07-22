@@ -8,7 +8,7 @@ members = [
     "games/sandbox-shared",
     "games/sandbox-server",
     "games/sandbox-client"
-]
+, "crates/engine-ecs"]
 
 [workspace.package]
 version = "0.1.0"
@@ -16,10 +16,18 @@ edition = "2024"
 license = "MIT"
 
 [workspace.dependencies]
+bevy_ecs = "0.19"
+glam = {
+    version = "0.33",
+    features = ["serde", "bytemuck"]
+}
+
 engine-core = { path = "crates/engine-core" }
+engine-ecs = { path = "crates/engine-ecs" }
 engine-network = { path = "crates/engine-network" }
 engine-client = { path = "crates/engine-client" }
 engine-server = { path = "crates/engine-server" }
 
 sandbox-shared = { path = "games/sandbox-shared" }
 sandbox-server = { path = "games/sandbox-server" }
+

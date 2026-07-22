@@ -35,6 +35,12 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     wait_and_print_messages(&mut client)?;
 
+    println!("[cliente] tentando movimentar -1");
+
+    client.send(ClientMessage::Move { delta: -1.0 })?;
+
+    wait_and_print_messages(&mut client)?;
+
     println!("[cliente] solicitando desligamento");
 
     client.send(ClientMessage::Shutdown)?;

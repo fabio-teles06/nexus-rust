@@ -1,0 +1,10 @@
+[package]
+name = "engine-ecs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+engine-core.workspace = true
+bevy_ecs.workspace = true
+glam.workspace = true
