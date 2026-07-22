@@ -5,7 +5,9 @@ use sandbox_shared::ServerMessage;
 use crate::client::SandboxClient;
 
 impl SandboxClient {
-    pub(crate) fn poll_server(&mut self) -> Result<(), TransportError> {
+    pub(crate) fn poll_server(
+        &mut self,
+    ) -> Result<(), TransportError> {
         loop {
             let received = self.runtime.transport_mut().try_receive();
 
@@ -20,9 +22,7 @@ impl SandboxClient {
 
                 Err(TransportError::Disconnected) => {
                     self.connected = false;
-
                     println!("[cliente] conexão encerrada");
-
                     return Ok(());
                 }
 
@@ -59,7 +59,11 @@ impl SandboxClient {
                 kind,
                 transform,
             } => {
-                self.spawn_or_update_entity(network_id, kind, transform);
+                self.spawn_or_update_entity(
+                    network_id,
+                    kind,
+                    transform,
+                );
             }
 
             ServerMessage::UpdateTransform {
@@ -69,11 +73,12 @@ impl SandboxClient {
             } => {
                 self.update_entity_transform(network_id, transform);
 
-                if self.local_player == Some(network_id) && server_tick.0 % 15 == 0 {
+                if self.local_player == Some(network_id)
+                    && server_tick.0 % 60 == 0
+                {
                     println!(
-                        "[cliente] tick={} posição={:?}",
-                        server_tick.0,
-                        Vec3::from_array(transform.translation,)
+                        "[cliente] posição={:?}",
+                        Vec3::from_array(transform.translation)
                     );
                 }
             }
@@ -82,13 +87,26 @@ impl SandboxClient {
                 self.despawn_entity(network_id);
             }
 
-            ServerMessage::ServerTick { tick } => {
-                println!("[cliente] tick do servidor: {}", tick.0);
+            ServerMessage::Scoreboard {
+                players,
+                target_score,
+            } => {
+                self.scoreboard = players;
+                self.target_score = target_score;
+                self.winner = None;
+
+                println!("[placar] {}", self.window_title());
             }
 
-            ServerMessage::Stopped => {
-                println!("[cliente] servidor desligado");
+            ServerMessage::RoundWon { player_name } => {
+                println!("[jogo] {player_name} venceu a rodada!");
+                self.winner = Some(player_name);
+            }
 
+            ServerMessage::ServerTick { .. } => {}
+
+            ServerMessage::Stopped => {
+                println!("[cliente] servidor integrado desligado");
                 self.connected = false;
             }
         }

@@ -1,38 +1,58 @@
 use engine_core::{ClientId, Tick};
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+)]
 pub struct NetworkId(pub u64);
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct TransformSnapshot {
     pub translation: [f32; 3],
     pub rotation: [f32; 4],
     pub scale: [f32; 3],
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EntityKind {
     Player,
+    Orb,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct PlayerInput {
     pub sequence: u32,
     pub direction: [f32; 3],
 }
 
-/// Mensagens enviadas pelo cliente ao servidor.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlayerScoreSnapshot {
+    pub player_name: String,
+    pub score: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ClientMessage {
-    Join { player_name: String },
+    Join {
+        player_name: String,
+    },
 
     Input(PlayerInput),
 
-    Shutdown,
+    Leave,
+
+    /// Usado somente pelo modo de servidor integrado.
+    ShutdownServer,
 }
 
-/// Mensagens enviadas pelo servidor ao cliente.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ServerMessage {
     Welcome {
         client_id: ClientId,
@@ -54,6 +74,15 @@ pub enum ServerMessage {
 
     DespawnEntity {
         network_id: NetworkId,
+    },
+
+    Scoreboard {
+        players: Vec<PlayerScoreSnapshot>,
+        target_score: u32,
+    },
+
+    RoundWon {
+        player_name: String,
     },
 
     ServerTick {

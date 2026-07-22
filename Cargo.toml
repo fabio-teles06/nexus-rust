@@ -10,7 +10,8 @@ members = [
 
     "games/sandbox-shared",
     "games/sandbox-server",
-    "games/sandbox-client"
+    "games/sandbox-client",
+    "games/sandbox-dedicated-server",
 ]
 
 [workspace.package]
@@ -20,23 +21,25 @@ license = "MIT"
 
 [workspace.dependencies]
 bevy_ecs = "0.19"
-winit="0.30"
-wgpu="29"
-pollster="0.4"
-thiserror="2"
+winit = "0.30"
+wgpu = "29"
+pollster = "0.4"
+thiserror = "2"
+bincode = "1.3"
 
-bytemuck={
-    version="1.25",
-    features=["derive"]
+bytemuck = {
+    version = "1.25",
+    features = ["derive"],
 }
 
 glam = {
     version = "0.33",
-    features = ["serde", "bytemuck"]
+    features = ["serde", "bytemuck"],
 }
+
 serde = {
     version = "1",
-    features = ["derive"]
+    features = ["derive"],
 }
 
 engine-core = { path = "crates/engine-core" }
@@ -48,4 +51,3 @@ engine-server = { path = "crates/engine-server" }
 
 sandbox-shared = { path = "games/sandbox-shared" }
 sandbox-server = { path = "games/sandbox-server" }
-

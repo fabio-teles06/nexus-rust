@@ -1,6 +1,10 @@
 use engine_ecs::prelude::*;
 
-use crate::{components::Player, resources::SimulationTime};
+use crate::{
+    components::Player,
+    config::ARENA_HALF_SIZE,
+    resources::SimulationTime,
+};
 
 pub(crate) fn movement_system(
     time: Res<SimulationTime>,
@@ -12,5 +16,14 @@ pub(crate) fn movement_system(
         }
 
         transform.translation += velocity.linear * time.delta_seconds;
+        transform.translation.x = transform
+            .translation
+            .x
+            .clamp(-ARENA_HALF_SIZE, ARENA_HALF_SIZE);
+        transform.translation.z = transform
+            .translation
+            .z
+            .clamp(-ARENA_HALF_SIZE, ARENA_HALF_SIZE);
+        transform.translation.y = 0.0;
     }
 }

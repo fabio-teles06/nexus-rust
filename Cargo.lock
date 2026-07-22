@@ -310,6 +310,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "bincode"
+version = "1.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b1f45e9417d87227c7a56d22e471c6206462cba514c7590c09aff4cf6d1ddcad"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "bit-set"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -666,7 +675,9 @@ dependencies = [
 name = "engine-network"
 version = "0.1.0"
 dependencies = [
+ "bincode",
  "engine-core",
+ "serde",
 ]
 
 [[package]]
@@ -1886,6 +1897,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "sandbox-dedicated-server"
+version = "0.1.0"
+dependencies = [
+ "sandbox-server",
+]
+
+[[package]]
 name = "sandbox-server"
 version = "0.1.0"
 dependencies = [
@@ -1902,6 +1920,7 @@ name = "sandbox-shared"
 version = "0.1.0"
 dependencies = [
  "engine-core",
+ "serde",
 ]
 
 [[package]]

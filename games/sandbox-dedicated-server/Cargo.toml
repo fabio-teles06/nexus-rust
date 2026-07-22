@@ -1,10 +1,8 @@
 [package]
-name = "engine-network"
+name = "sandbox-dedicated-server"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-engine-core.workspace = true
-serde.workspace = true
-bincode.workspace = true
+sandbox-server.workspace = true

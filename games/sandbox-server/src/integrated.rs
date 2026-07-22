@@ -1,7 +1,9 @@
 use std::thread::{self, JoinHandle};
 
 use engine_core::ClientId;
-use engine_network::{LocalClientTransport, TransportError, local_transport_pair};
+use engine_network::{
+    LocalClientTransport, TransportError, local_transport_pair,
+};
 use engine_server::ServerRuntime;
 use sandbox_shared::{ClientMessage, ServerMessage};
 
@@ -10,7 +12,8 @@ use crate::{
     game::SandboxGame,
 };
 
-pub type SandboxClientTransport = LocalClientTransport<ClientMessage, ServerMessage>;
+pub type SandboxClientTransport =
+    LocalClientTransport<ClientMessage, ServerMessage>;
 
 pub fn start_integrated_server() -> (
     SandboxClientTransport,
@@ -24,7 +27,7 @@ pub fn start_integrated_server() -> (
     let server_thread = thread::Builder::new()
         .name("integrated-server".to_string())
         .spawn(move || {
-            let game = SandboxGame::new();
+            let game = SandboxGame::integrated();
 
             ServerRuntime::new(game, server_transport, SERVER_TICK_RATE).run()
         })

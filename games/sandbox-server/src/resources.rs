@@ -26,6 +26,11 @@ impl Default for ServerState {
 }
 
 #[derive(Resource, Debug, Clone, Copy)]
+pub(crate) struct ServerSettings {
+    pub allow_shutdown: bool,
+}
+
+#[derive(Resource, Debug, Clone, Copy)]
 pub(crate) struct SimulationTime {
     pub tick: Tick,
     pub delta_seconds: f32,
@@ -64,4 +69,9 @@ impl NetworkIdGenerator {
 #[derive(Resource, Default)]
 pub(crate) struct PlayerRegistry {
     pub players: HashMap<ClientId, NetworkId>,
+}
+
+#[derive(Resource, Default)]
+pub(crate) struct OrbRespawnState {
+    pub next_index: usize,
 }

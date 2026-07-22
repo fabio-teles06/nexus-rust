@@ -4,7 +4,6 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
-
 [dependencies]
 engine-client.workspace = true
 engine-ecs.workspace = true

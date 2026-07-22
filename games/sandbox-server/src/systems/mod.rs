@@ -1,8 +1,10 @@
+mod arena;
 mod messages;
 mod movement;
 mod replication;
 mod tick;
 
+pub(crate) use arena::collect_orb_system;
 pub(crate) use messages::process_client_messages;
 pub(crate) use movement::movement_system;
 pub(crate) use replication::replicate_changed_transforms;

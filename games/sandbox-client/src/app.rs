@@ -18,56 +18,87 @@ use winit::{
     window::{Window, WindowId},
 };
 
-use crate::client::SandboxClient;
+use crate::{
+    args::{ClientArgs, LaunchMode},
+    client::SandboxClient,
+    connection::ClientConnection,
+};
 
-const CLIENT_UPDATE_INTERVAL: Duration = Duration::from_millis(16);
+const CLIENT_UPDATE_INTERVAL: Duration =
+    Duration::from_millis(16);
 
 pub(crate) struct SandboxApp {
     client: SandboxClient,
-
     window: Option<Arc<Window>>,
     renderer: Option<Renderer>,
-
-    server_thread: Option<JoinHandle<Result<(), TransportError>>>,
-
+    server_thread:
+        Option<JoinHandle<Result<(), TransportError>>>,
+    shutdown_server_on_exit: bool,
     next_update: Instant,
     shutdown_sent: bool,
 }
 
 impl SandboxApp {
-    pub(crate) fn new() -> Result<Self, TransportError> {
-        let (transport, server_thread) = start_integrated_server();
+    pub(crate) fn new(
+        args: ClientArgs,
+    ) -> Result<Self, Box<dyn Error>> {
+        let (
+            connection,
+            server_thread,
+            shutdown_server_on_exit,
+        ) = match args.mode {
+            LaunchMode::Integrated => {
+                let (transport, server_thread) =
+                    start_integrated_server();
 
-        let mut client = SandboxClient::new(transport);
+                (
+                    ClientConnection::local(transport),
+                    Some(server_thread),
+                    true,
+                )
+            }
+
+            LaunchMode::Remote(address) => {
+                println!("[cliente] conectando em {address}");
+
+                (
+                    ClientConnection::remote(&address)?,
+                    None,
+                    false,
+                )
+            }
+        };
+
+        let mut client = SandboxClient::new(connection);
 
         client.send(ClientMessage::Join {
-            player_name: "Fabio".to_string(),
+            player_name: args.player_name,
         })?;
 
         Ok(Self {
             client,
             window: None,
             renderer: None,
-            server_thread: Some(server_thread),
+            server_thread,
+            shutdown_server_on_exit,
             next_update: Instant::now(),
             shutdown_sent: false,
         })
     }
 
-    pub(crate) fn join_server(&mut self) -> Result<(), Box<dyn Error>> {
-        self.request_shutdown();
-
+    pub(crate) fn join_server(
+        &mut self,
+    ) -> Result<(), Box<dyn Error>> {
         let Some(server_thread) = self.server_thread.take() else {
             return Ok(());
         };
 
         match server_thread.join() {
-            Ok(result) => {
-                result?;
-            }
-
+            Ok(result) => result?,
             Err(_) => {
-                return Err("a thread do servidor entrou em pânico".into());
+                return Err(
+                    "a thread do servidor entrou em pânico".into(),
+                );
             }
         }
 
@@ -83,7 +114,6 @@ impl SandboxApp {
 
         if let Err(error) = self.client.update(now) {
             eprintln!("[cliente] erro durante atualização: {error}");
-
             self.request_shutdown();
             event_loop.exit();
             return;
@@ -96,11 +126,8 @@ impl SandboxApp {
 
         self.next_update = now + CLIENT_UPDATE_INTERVAL;
 
-        /*
-         * Solicita ao winit que gere
-         * WindowEvent::RedrawRequested.
-         */
         if let Some(window) = &self.window {
+            window.set_title(&self.client.window_title());
             window.request_redraw();
         }
     }
@@ -123,22 +150,29 @@ impl SandboxApp {
 
             RenderFrameStatus::SurfaceLost => {
                 eprintln!("[render] a superfície gráfica foi perdida");
-
                 self.request_shutdown();
                 event_loop.exit();
             }
 
             RenderFrameStatus::ValidationError => {
-                eprintln!("[render] erro de validação ao obter o frame");
-
+                eprintln!(
+                    "[render] erro de validação ao obter o frame"
+                );
                 self.request_shutdown();
                 event_loop.exit();
             }
         }
     }
 
-    fn handle_keyboard(&mut self, event_loop: &ActiveEventLoop, key: KeyCode, state: ElementState) {
-        if key == KeyCode::Escape && state == ElementState::Pressed {
+    fn handle_keyboard(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        key: KeyCode,
+        state: ElementState,
+    ) {
+        if key == KeyCode::Escape
+            && state == ElementState::Pressed
+        {
             self.request_shutdown();
             event_loop.exit();
             return;
@@ -147,23 +181,29 @@ impl SandboxApp {
         let changed = self.client.handle_key(key, state);
 
         if changed {
-            if let Err(error) = self.client.send_current_input(Instant::now()) {
+            if let Err(error) = self
+                .client
+                .send_current_input(Instant::now())
+            {
                 eprintln!("[cliente] erro ao enviar input: {error}");
-
                 self.request_shutdown();
                 event_loop.exit();
             }
         }
     }
 
-    fn handle_focus_lost(&mut self, event_loop: &ActiveEventLoop) {
+    fn handle_focus_lost(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+    ) {
         if !self.client.clear_input() {
             return;
         }
 
-        if let Err(error) = self.client.send_current_input(Instant::now()) {
+        if let Err(error) =
+            self.client.send_current_input(Instant::now())
+        {
             eprintln!("[cliente] erro ao limpar input: {error}");
-
             self.request_shutdown();
             event_loop.exit();
         }
@@ -175,12 +215,19 @@ impl SandboxApp {
         }
 
         self.shutdown_sent = true;
-
         self.client.clear_input();
 
-        let _ = self.client.send_current_input(Instant::now());
+        let _ = self
+            .client
+            .send_current_input(Instant::now());
 
-        let _ = self.client.send(ClientMessage::Shutdown);
+        let message = if self.shutdown_server_on_exit {
+            ClientMessage::ShutdownServer
+        } else {
+            ClientMessage::Leave
+        };
+
+        let _ = self.client.send(message);
     }
 }
 
@@ -191,15 +238,13 @@ impl ApplicationHandler for SandboxApp {
         }
 
         let attributes = Window::default_attributes()
-            .with_title("Nexus Engine - Sandbox")
+            .with_title("Nexus Arena")
             .with_inner_size(LogicalSize::new(1280.0, 720.0));
 
         let window = match event_loop.create_window(attributes) {
             Ok(window) => Arc::new(window),
-
             Err(error) => {
                 eprintln!("[cliente] erro ao criar janela: {error}");
-
                 self.request_shutdown();
                 event_loop.exit();
                 return;
@@ -208,26 +253,27 @@ impl ApplicationHandler for SandboxApp {
 
         let display_handle = event_loop.owned_display_handle();
 
-        let renderer = match Renderer::new(window.clone(), display_handle) {
-            Ok(renderer) => renderer,
-
-            Err(error) => {
-                eprintln!("[render] erro ao iniciar renderer: {error}");
-
-                self.request_shutdown();
-                event_loop.exit();
-                return;
-            }
-        };
+        let renderer =
+            match Renderer::new(window.clone(), display_handle) {
+                Ok(renderer) => renderer,
+                Err(error) => {
+                    eprintln!(
+                        "[render] erro ao iniciar renderer: {error}"
+                    );
+                    self.request_shutdown();
+                    event_loop.exit();
+                    return;
+                }
+            };
 
         self.window = Some(window);
         self.renderer = Some(renderer);
         self.next_update = Instant::now();
 
-        println!("[cliente] renderizador iniciado");
-
         println!("[cliente] use W/A/S/D ou as setas");
-
+        println!(
+            "[cliente] colete o cubo dourado; primeiro a 5 vence"
+        );
         println!("[cliente] pressione ESC para sair");
     }
 
@@ -237,7 +283,11 @@ impl ApplicationHandler for SandboxApp {
         window_id: WindowId,
         event: WindowEvent,
     ) {
-        let correct_window = self.window.as_ref().map(|window| window.id()) == Some(window_id);
+        let correct_window = self
+            .window
+            .as_ref()
+            .map(|window| window.id())
+            == Some(window_id);
 
         if !correct_window {
             return;
@@ -260,11 +310,17 @@ impl ApplicationHandler for SandboxApp {
                     return;
                 }
 
-                let PhysicalKey::Code(key_code) = event.physical_key else {
+                let PhysicalKey::Code(key_code) =
+                    event.physical_key
+                else {
                     return;
                 };
 
-                self.handle_keyboard(event_loop, key_code, event.state);
+                self.handle_keyboard(
+                    event_loop,
+                    key_code,
+                    event.state,
+                );
             }
 
             WindowEvent::Focused(false) => {
@@ -282,7 +338,9 @@ impl ApplicationHandler for SandboxApp {
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         self.update(event_loop);
 
-        event_loop.set_control_flow(ControlFlow::WaitUntil(self.next_update));
+        event_loop.set_control_flow(
+            ControlFlow::WaitUntil(self.next_update),
+        );
     }
 
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
