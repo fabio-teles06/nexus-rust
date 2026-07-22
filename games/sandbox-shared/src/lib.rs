@@ -15,12 +15,18 @@ pub enum EntityKind {
     Player,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PlayerInput {
+    pub sequence: u32,
+    pub direction: [f32; 3],
+}
+
 /// Mensagens enviadas pelo cliente ao servidor.
 #[derive(Debug, Clone)]
 pub enum ClientMessage {
     Join { player_name: String },
 
-    Move { direction: [f32; 3] },
+    Input(PlayerInput),
 
     Shutdown,
 }
@@ -56,4 +62,3 @@ pub enum ServerMessage {
 
     Stopped,
 }
-

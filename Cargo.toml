@@ -17,6 +17,7 @@ license = "MIT"
 
 [workspace.dependencies]
 bevy_ecs = "0.19"
+winit="0.30"
 glam = {
     version = "0.33",
     features = ["serde", "bytemuck"]

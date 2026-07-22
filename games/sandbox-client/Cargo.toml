@@ -9,7 +9,9 @@ license.workspace = true
 engine-client.workspace = true
 engine-network.workspace = true
 engine-ecs.workspace = true
-bevy_ecs.workspace = true
 
 sandbox-shared.workspace = true
 sandbox-server.workspace = true
+
+bevy_ecs.workspace = true
+winit.workspace = true
