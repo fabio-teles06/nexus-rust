@@ -5,10 +5,13 @@ members = [
     "crates/engine-network",
     "crates/engine-client",
     "crates/engine-server",
+    "crates/engine-render",
+    "crates/engine-ecs",
+
     "games/sandbox-shared",
     "games/sandbox-server",
     "games/sandbox-client"
-, "crates/engine-ecs"]
+]
 
 [workspace.package]
 version = "0.1.0"
@@ -18,6 +21,15 @@ license = "MIT"
 [workspace.dependencies]
 bevy_ecs = "0.19"
 winit="0.30"
+wgpu="30"
+pollster="0.4"
+thiserror="2"
+
+bytemuck={
+    version="1.25",
+    features=["derive"]
+}
+
 glam = {
     version = "0.33",
     features = ["serde", "bytemuck"]
@@ -30,6 +42,7 @@ serde = {
 engine-core = { path = "crates/engine-core" }
 engine-ecs = { path = "crates/engine-ecs" }
 engine-network = { path = "crates/engine-network" }
+engine-render = { path = "crates/engine-render" }
 engine-client = { path = "crates/engine-client" }
 engine-server = { path = "crates/engine-server" }
 

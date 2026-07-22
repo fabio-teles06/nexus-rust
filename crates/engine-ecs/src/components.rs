@@ -1,13 +1,7 @@
 use bevy_ecs::prelude::*;
 use glam::{Mat4, Quat, Vec3};
 
-#[derive(
-    Component,
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-)]
+#[derive(Component, Debug, Clone, Copy, PartialEq)]
 pub struct Transform {
     pub translation: Vec3,
     pub rotation: Quat,
@@ -47,11 +41,7 @@ impl Transform {
     }
 
     pub fn compute_matrix(&self) -> Mat4 {
-        Mat4::from_scale_rotation_translation(
-            self.scale,
-            self.rotation,
-            self.translation,
-        )
+        Mat4::from_scale_rotation_translation(self.scale, self.rotation, self.translation)
     }
 
     pub fn translate(&mut self, translation: Vec3) {
@@ -81,14 +71,7 @@ impl Default for Transform {
     }
 }
 
-#[derive(
-    Component,
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Default,
-)]
+#[derive(Component, Debug, Clone, Copy, PartialEq, Default)]
 pub struct Velocity {
     pub linear: Vec3,
     pub angular: Vec3,

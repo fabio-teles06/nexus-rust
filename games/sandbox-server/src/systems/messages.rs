@@ -67,6 +67,7 @@ fn handle_join(
         Player,
         PlayerOwner(client_id),
         NetworkEntity(network_id),
+        LastInputSequence::default(),
         transform,
         Velocity::default(),
     ));

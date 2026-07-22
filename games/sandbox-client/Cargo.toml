@@ -7,8 +7,9 @@ license.workspace = true
 
 [dependencies]
 engine-client.workspace = true
-engine-network.workspace = true
 engine-ecs.workspace = true
+engine-network.workspace = true
+engine-render.workspace = true
 
 sandbox-shared.workspace = true
 sandbox-server.workspace = true

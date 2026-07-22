@@ -48,7 +48,7 @@ impl SandboxClient {
         let Some(&entity) = self.entities.get(&network_id) else {
             return;
         };
-        
+
         self.world
             .entity_mut(entity)
             .insert(transform_from_snapshot(snapshot));

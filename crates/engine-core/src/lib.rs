@@ -1,8 +1,8 @@
+use serde::{Deserialize, Serialize};
 use std::{
     thread,
     time::{Duration, Instant},
 };
-use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ClientId(pub u32);

@@ -3,6 +3,7 @@ mod client;
 mod components;
 mod input;
 mod network;
+mod render_scene;
 mod replication;
 
 use std::error::Error;
