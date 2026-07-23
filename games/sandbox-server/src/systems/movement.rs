@@ -17,10 +17,8 @@ pub(crate) fn physics_movement(world: &mut World) {
     let mut velocity_commands = Vec::new();
 
     {
-        let mut players = world.query_filtered::<
-            (&PhysicsBody, &mut PlayerInputState),
-            With<Player>,
-        >();
+        let mut players =
+            world.query_filtered::<(&PhysicsBody, &mut PlayerInputState), With<Player>>();
 
         for (physics_body, mut input) in players.iter_mut(world) {
             if let Some(latest) = input.pending.pop_back() {
@@ -35,10 +33,7 @@ pub(crate) fn physics_movement(world: &mut World) {
                 input.last_processed = latest.sequence;
             }
 
-            velocity_commands.push((
-                *physics_body,
-                input.current_direction * PLAYER_SPEED,
-            ));
+            velocity_commands.push((*physics_body, input.current_direction * PLAYER_SPEED));
         }
     }
 
@@ -49,10 +44,7 @@ pub(crate) fn physics_movement(world: &mut World) {
 
         physics.step(delta_seconds);
 
-        let mut players = world.query_filtered::<
-            (&PhysicsBody, &mut Transform),
-            With<Player>,
-        >();
+        let mut players = world.query_filtered::<(&PhysicsBody, &mut Transform), With<Player>>();
 
         for (physics_body, mut transform) in players.iter_mut(world) {
             let Some(state) = physics.body_state(*physics_body) else {
