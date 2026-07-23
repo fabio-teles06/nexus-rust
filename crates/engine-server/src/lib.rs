@@ -1,83 +1,49 @@
 use engine_core::{ClientId, FixedTicker, Tick};
+use engine_network::{ConnectionEvent, ServerTransport, TransportError};
 
-use engine_network::{ServerTransport, TransportError};
+pub enum Outgoing<M> { To(ClientId, M), Broadcast(M) }
 
-/// Interface que um jogo deve implementar no lado servidor.
 pub trait ServerGame {
     type ClientMessage: Send + 'static;
-    type ServerMessage: Send + 'static;
-
-    /// Processa uma mensagem recebida de um cliente.
+    type ServerMessage: Clone + Send + 'static;
+    fn connected(&mut self, client_id: ClientId);
+    fn disconnected(&mut self, client_id: ClientId);
     fn handle_message(&mut self, client_id: ClientId, message: Self::ClientMessage);
-
-    /// Atualiza a simulação do mundo.
     fn update(&mut self, tick: Tick);
-
-    /// Retorna as mensagens pendentes que serão enviadas.
-    fn drain_outgoing(&mut self) -> Vec<(ClientId, Self::ServerMessage)>;
-
-    /// Informa se o servidor deve continuar executando.
+    fn drain_outgoing(&mut self) -> Vec<Outgoing<Self::ServerMessage>>;
     fn is_running(&self) -> bool;
 }
 
-pub struct ServerRuntime<Game, Transport>
+pub struct ServerRuntime<G, T> { game: G, transport: T, tick_rate: u32 }
+impl<G, T> ServerRuntime<G, T>
 where
-    Game: ServerGame,
-    Transport: ServerTransport<Incoming = Game::ClientMessage, Outgoing = Game::ServerMessage>,
+    G: ServerGame,
+    T: ServerTransport<Incoming = G::ClientMessage, Outgoing = G::ServerMessage>,
 {
-    game: Game,
-    transport: Transport,
-    tick_rate: u32,
-}
-
-impl<Game, Transport> ServerRuntime<Game, Transport>
-where
-    Game: ServerGame,
-    Transport: ServerTransport<Incoming = Game::ClientMessage, Outgoing = Game::ServerMessage>,
-{
-    pub fn new(game: Game, transport: Transport, tick_rate: u32) -> Self {
-        assert!(tick_rate > 0);
-
-        Self {
-            game,
-            transport,
-            tick_rate,
-        }
-    }
-
+    pub fn new(game: G, transport: T, tick_rate: u32) -> Self { Self { game, transport, tick_rate } }
     pub fn run(mut self) -> Result<(), TransportError> {
         let mut ticker = FixedTicker::new(self.tick_rate);
-
         while self.game.is_running() {
-            /*
-             * Processa todas as mensagens disponíveis antes
-             * de atualizar o mundo.
-             */
-            while let Some((client_id, message)) = self.transport.try_receive()? {
-                self.game.handle_message(client_id, message);
+            while let Some(event) = self.transport.try_receive()? {
+                match event {
+                    ConnectionEvent::Connected(id) => self.game.connected(id),
+                    ConnectionEvent::Disconnected(id) => self.game.disconnected(id),
+                    ConnectionEvent::Message(id, message) => self.game.handle_message(id, message),
+                }
             }
-
-            /*
-             * Uma mensagem pode ter solicitado o desligamento.
-             */
-            if self.game.is_running() {
-                self.game.update(ticker.current_tick());
+            self.game.update(ticker.current_tick());
+            for outgoing in self.game.drain_outgoing() {
+                match outgoing {
+                    Outgoing::To(id, message) => {
+                        if !matches!(self.transport.send(id, message), Ok(()) | Err(TransportError::UnknownClient(_))) {
+                            return Err(TransportError::Disconnected);
+                        }
+                    }
+                    Outgoing::Broadcast(message) => self.transport.broadcast(message)?,
+                }
             }
-
-            /*
-             * Envia todas as respostas produzidas pelo jogo.
-             */
-            for (client_id, message) in self.game.drain_outgoing() {
-                self.transport.send(client_id, message)?;
-            }
-
-            if !self.game.is_running() {
-                break;
-            }
-
             ticker.wait_for_next_tick();
         }
-
         Ok(())
     }
 }

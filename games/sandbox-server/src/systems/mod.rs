@@ -1,9 +1,9 @@
-mod messages;
+mod input;
+mod lifecycle;
 mod movement;
 mod replication;
-mod tick;
 
-pub(crate) use messages::process_client_messages;
-pub(crate) use movement::movement_system;
-pub(crate) use replication::replicate_changed_transforms;
-pub(crate) use tick::send_periodic_tick;
+pub(crate) use input::process_messages;
+pub(crate) use lifecycle::{process_connected, process_disconnected};
+pub(crate) use movement::physics_movement;
+pub(crate) use replication::replicate_snapshot_batch;

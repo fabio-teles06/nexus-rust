@@ -1,9 +1,12 @@
-use engine_ecs::prelude::*;
+use engine_assets::{MaterialAsset, MeshAsset};
+use engine_ecs::RenderTransform;
 use engine_render::RenderInstance;
+use glam::Vec3;
 
 use crate::{
+    assets::ClientAssets,
     client::SandboxClient,
-    components::{ClientEntityKind, LocalPlayer},
+    components::{ClientNetworkId, MaterialHandle, MeshHandle},
 };
 
 pub(crate) struct RenderScene {
@@ -13,31 +16,31 @@ pub(crate) struct RenderScene {
 
 impl SandboxClient {
     pub(crate) fn build_render_scene(&mut self) -> RenderScene {
-        let mut instances = static_world_instances();
-
+        let mut query = self.world.query::<(
+            &RenderTransform,
+            &MeshHandle,
+            &MaterialHandle,
+            Option<&ClientNetworkId>,
+        )>();
+        let assets = self.world.resource::<ClientAssets>();
+        let mut instances = Vec::new();
         let mut camera_target = None;
 
-        let mut query = self
-            .world
-            .query::<(&Transform, Option<&LocalPlayer>, Option<&ClientEntityKind>)>();
-
-        for (transform, local_player, _entity_kind) in query.iter(&self.world) {
-            let color = if local_player.is_some() {
-                /*
-                 * Jogador local.
-                 */
-                [0.12, 0.48, 1.0, 1.0]
-            } else {
-                /*
-                 * Outras entidades replicadas.
-                 */
-                [1.0, 0.38, 0.12, 1.0]
+        for (render, mesh, material, network_id) in query.iter(&self.world) {
+            let Some(MeshAsset::Cube) = assets.meshes.get(mesh.0) else {
+                continue;
             };
 
-            instances.push(RenderInstance::new(transform.compute_matrix(), color));
+            let color = assets
+                .materials
+                .get(material.0)
+                .map(material_color)
+                .unwrap_or([1.0, 1.0, 1.0, 1.0]);
 
-            if local_player.is_some() {
-                camera_target = Some(transform.translation + Vec3::Y * 0.35);
+            instances.push(RenderInstance::new(render.0.compute_matrix(), color));
+
+            if network_id.is_some_and(|id| self.local_player == Some(id.0)) {
+                camera_target = Some(render.0.translation + Vec3::Y * 0.3);
             }
         }
 
@@ -48,42 +51,6 @@ impl SandboxClient {
     }
 }
 
-fn static_world_instances() -> Vec<RenderInstance> {
-    let mut instances = Vec::with_capacity(8);
-
-    /*
-     * Piso.
-     */
-    instances.push(RenderInstance::from_translation_scale(
-        Vec3::new(0.0, -0.6, 0.0),
-        Vec3::new(30.0, 0.2, 30.0),
-        [0.19, 0.27, 0.20, 1.0],
-    ));
-
-    /*
-     * Pilar central de referência.
-     */
-    instances.push(RenderInstance::from_translation_scale(
-        Vec3::new(0.0, 1.0, 0.0),
-        Vec3::new(0.25, 2.0, 0.25),
-        [0.9, 0.75, 0.15, 1.0],
-    ));
-
-    add_pillar(&mut instances, Vec3::new(5.0, 1.0, 5.0));
-
-    add_pillar(&mut instances, Vec3::new(-5.0, 1.0, 5.0));
-
-    add_pillar(&mut instances, Vec3::new(5.0, 1.0, -5.0));
-
-    add_pillar(&mut instances, Vec3::new(-5.0, 1.0, -5.0));
-
-    instances
-}
-
-fn add_pillar(instances: &mut Vec<RenderInstance>, position: Vec3) {
-    instances.push(RenderInstance::from_translation_scale(
-        position,
-        Vec3::new(0.7, 2.0, 0.7),
-        [0.58, 0.35, 0.16, 1.0],
-    ));
+fn material_color(material: &MaterialAsset) -> [f32; 4] {
+    material.base_color.to_array()
 }

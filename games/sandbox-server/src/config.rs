@@ -1,5 +1,5 @@
-pub const SERVER_TICK_RATE: u32 = 60; // 30 ticks per second
-pub const LOCAL_TRANSPORT_CAPACITY: usize = 1024 * 1024 * 10; // 10 MB
-
-// Player movement
-pub const PLAYER_SPEED: f32 = 5.0; // 5 units per second
+pub const SERVER_TICK_RATE: u32 = 30;
+pub const SNAPSHOT_RATE: u32 = 15;
+pub const PLAYER_SPEED: f32 = 5.0;
+pub const EVENT_CAPACITY: usize = 2048;
+pub const CLIENT_CAPACITY: usize = 512;

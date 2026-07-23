@@ -2,50 +2,46 @@
 resolver = "3"
 members = [
     "crates/engine-core",
+    "crates/engine-ecs",
+    "crates/engine-assets",
     "crates/engine-network",
+    "crates/engine-physics",
     "crates/engine-client",
     "crates/engine-server",
     "crates/engine-render",
-    "crates/engine-ecs",
-
     "games/sandbox-shared",
     "games/sandbox-server",
-    "games/sandbox-client"
+    "games/sandbox-client",
+    "games/sandbox-multi-client",
 ]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-license = "MIT"
+license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+postcard = { version = "1", features = ["alloc"] }
+bytemuck = { version = "1", features = ["derive"] }
+pollster = "0.4"
+
 bevy_ecs = "0.19"
-winit="0.30"
-wgpu="29"
-pollster="0.4"
-thiserror="2"
-
-bytemuck={
-    version="1.25",
-    features=["derive"]
-}
-
-glam = {
-    version = "0.33",
-    features = ["serde", "bytemuck"]
-}
-serde = {
-    version = "1",
-    features = ["derive"]
-}
+glam = { version = "0.30", features = ["serde"] }
+winit = "0.30"
+wgpu = "=29.0.3"
+rapier3d = "=0.34.0"
 
 engine-core = { path = "crates/engine-core" }
 engine-ecs = { path = "crates/engine-ecs" }
+engine-assets = { path = "crates/engine-assets" }
 engine-network = { path = "crates/engine-network" }
-engine-render = { path = "crates/engine-render" }
+engine-physics = { path = "crates/engine-physics" }
 engine-client = { path = "crates/engine-client" }
 engine-server = { path = "crates/engine-server" }
+engine-render = { path = "crates/engine-render" }
 
 sandbox-shared = { path = "games/sandbox-shared" }
 sandbox-server = { path = "games/sandbox-server" }
-

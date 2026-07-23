@@ -1,9 +1,8 @@
 [package]
-name = "engine-client"
+name = "engine-assets"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-engine-network.workspace = true
-engine-core.workspace = true
+glam.workspace = true

@@ -6,3 +6,4 @@ license.workspace = true
 
 [dependencies]
 engine-core.workspace = true
+thiserror.workspace = true

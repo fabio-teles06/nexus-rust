@@ -1,6 +1,3 @@
-.vscode
-.idea
-
-
-*.log
-target
+/target
+*.pdb
+.DS_Store

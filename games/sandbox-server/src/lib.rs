@@ -7,4 +7,4 @@ mod snapshot;
 mod systems;
 
 pub use game::SandboxGame;
-pub use integrated::{SandboxClientTransport, start_integrated_server};
+pub use integrated::{SandboxClientTransport, SandboxNetworkHub, start_integrated_server};

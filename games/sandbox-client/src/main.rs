@@ -1,25 +1,19 @@
 mod app;
+mod assets;
 mod client;
 mod components;
 mod input;
-mod network;
-mod render_scene;
 mod replication;
+mod render_scene;
 
-use std::error::Error;
-
+use anyhow::Result;
 use app::SandboxApp;
 use winit::event_loop::EventLoop;
 
-fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> Result<()> {
     let event_loop = EventLoop::new()?;
     let mut app = SandboxApp::new()?;
-
     event_loop.run_app(&mut app)?;
-
     app.join_server()?;
-
-    println!("[cliente] aplicação finalizada");
-
     Ok(())
 }
